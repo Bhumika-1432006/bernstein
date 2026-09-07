@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from bernstein.core.quality.gate_commands import (
+    GateRunnerCommandsMixin,
     _module_name_from_path,
     _resolve_import_from,
 )
@@ -686,7 +687,7 @@ class GateRunner:
             logger.warning("dead_code_detector.analyse failed: %s", exc)
             report = dead_code_detector.DeadCodeReport()
 
-        return self._build_dead_code_result(step, command, ok, vulture_detail, report)
+        return GateRunnerCommandsMixin._build_dead_code_result(step, command, ok, vulture_detail, report)
 
     def _run_comment_quality_gate_sync(
         self,
