@@ -35,7 +35,6 @@ from functools import lru_cache
 from pathlib import Path
 
 from bernstein.core import _REDIRECT_MAP
-from tests.unit._orphan_scan import describe_ratchet_drift, resolve_branch_only_ref, scan_at_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC = REPO_ROOT / "src" / "bernstein"
@@ -207,7 +206,14 @@ def test_every_compliance_module_has_a_non_test_importer() -> None:
     Reports both drift directions in one message, and -- when the branch's
     own pre-merge tip is resolvable -- states plainly when the drift belongs
     to the default branch rather than to this change.
+
+    The ``_orphan_scan`` import is deferred to inside this function -- see
+    the matching note in ``test_token_orphans.py::test_no_new_orphan_token_modules``
+    for why a module-level cross-file import breaks
+    ``scripts/check_test_count_drop.py``'s isolated collect-only check.
     """
+    from tests.unit._orphan_scan import describe_ratchet_drift, resolve_branch_only_ref, scan_at_ref
+
     current = _current_orphans()
 
     branch_ref = resolve_branch_only_ref(REPO_ROOT)

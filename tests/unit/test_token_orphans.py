@@ -22,7 +22,6 @@ from functools import lru_cache
 from pathlib import Path
 
 from bernstein.core import _REDIRECT_MAP
-from tests.unit._orphan_scan import describe_ratchet_drift, resolve_branch_only_ref, scan_at_ref
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOKENS_DIR = REPO_ROOT / "src" / "bernstein" / "core" / "tokens"
@@ -172,7 +171,18 @@ def test_no_new_orphan_token_modules() -> None:
     own pre-merge tip is resolvable (see ``_orphan_scan.py``) -- states
     plainly when the drift belongs to the default branch rather than to
     this change.
+
+    The ``_orphan_scan`` import is deferred to inside this function rather
+    than sitting at module level: ``scripts/check_test_count_drop.py``
+    collects a touched test module in isolation, as a lone file with no
+    sibling ``tests/unit/`` package around it, so a module-level cross-file
+    import would fail under ``--collect-only`` even though it resolves fine
+    in the real tree -- reported as a false "test count dropped to zero"
+    rather than the import-path artefact it actually is. A local import runs
+    only when the test executes, which collection never does.
     """
+    from tests.unit._orphan_scan import describe_ratchet_drift, resolve_branch_only_ref, scan_at_ref
+
     current = _current_orphans()
 
     branch_ref = resolve_branch_only_ref(REPO_ROOT)
