@@ -501,13 +501,19 @@ def verify_cmd(
     ),
 )
 def verify_export_cmd(export_file: Path, public_key_path: Path | None) -> None:
-    """Verify a SIEM export file is contiguous, in order, and unmodified.
+    """Verify a SIEM export file is contiguous, in order, and chain-linked.
 
     Reads a JSONL file produced by :class:`~bernstein.core.security.audit_export.FileExporter`
     -- exported records plus the interleaved ``segment_receipt`` lines -- and
     reports whether it is contiguous, has a gap, is reordered, or was
     tampered with. Works on the file alone: no database, no HMAC key,
     just the export and (optionally) the signer's public key (issue #5034).
+
+    This checks chain linkage (each record's ``prev_hmac`` against the
+    previous record's stored ``hmac``), not record content: a stored
+    ``hmac`` that no longer matches what it was computed over is not
+    detectable from the export alone. Content verification needs the HMAC
+    signing key, via ``bernstein audit verify``.
     """
     import json as _json
 
@@ -520,6 +526,7 @@ def verify_export_cmd(export_file: Path, public_key_path: Path | None) -> None:
 
     entries: list[AuditEntry] = []
     receipts: list[SegmentReceipt] = []
+    skipped_lines = 0
     for lineno, raw_line in enumerate(export_file.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw_line.strip()
         if not line:
@@ -528,8 +535,10 @@ def verify_export_cmd(export_file: Path, public_key_path: Path | None) -> None:
             row = _json.loads(line)
         except _json.JSONDecodeError:
             console.print(f"[red]Line {lineno} is not valid JSON -- skipping.[/red]")
+            skipped_lines += 1
             continue
         if not isinstance(row, dict):
+            skipped_lines += 1
             continue
         row = cast("dict[str, Any]", row)
         if "segment_receipt" in row:
@@ -556,12 +565,36 @@ def verify_export_cmd(export_file: Path, public_key_path: Path | None) -> None:
 
     result = verify_exported_records(entries, receipts, trusted_public_key_jwk=trusted_jwk)
 
+    # Which trust mode actually produced this result -- distinct claims that
+    # must not read the same way in the panel: a pinned signer, an
+    # unpinned (trust-on-first-use) signer, or no signature evidence at all.
+    if trusted_jwk is not None:
+        trust = "signer pinned"
+    elif receipts:
+        trust = "signer trusted on first use -- authenticity NOT verified, re-run with --public-key"
+    else:
+        trust = "no segment receipts -- sequence continuity only"
+
     console.print()
+    if result.ok and skipped_lines:
+        console.print(
+            Panel(
+                f"[bold yellow]Export Verification: INCOMPLETE[/bold yellow]\n"
+                f"[dim]{len(entries)} record(s), {len(receipts)} segment receipt(s) -- {result.detail}, "
+                f"but {skipped_lines} line(s) could not be parsed and were excluded from the check. "
+                "A skipped line is not accounted for by sequence continuity.[/dim]",
+                border_style="yellow",
+                expand=False,
+            )
+        )
+        console.print()
+        raise SystemExit(1)
     if result.ok:
         console.print(
             Panel(
                 f"[bold green]Export Verification: PASSED[/bold green]\n"
-                f"[dim]{len(entries)} record(s), {len(receipts)} segment receipt(s) -- {result.detail}.[/dim]",
+                f"[dim]{len(entries)} record(s), {len(receipts)} segment receipt(s) -- {result.detail}.\n"
+                f"Trust: {trust}.[/dim]",
                 border_style="green",
                 expand=False,
             )

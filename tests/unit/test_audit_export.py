@@ -290,6 +290,18 @@ class TestVerifyExportedRecords:
         assert result.ok
         assert result.status == ExportVerifyStatus.CONTIGUOUS
 
+    def test_the_detail_string_claims_chain_linkage_not_unmodified_content(self) -> None:
+        """The verifier never recomputes an hmac from content -- the detail must not claim it does.
+
+        A record's ``details`` could be edited with its stored ``hmac`` left
+        untouched and this check would still pass: it only proves
+        ``prev_hmac`` chains onto the previous record's stored ``hmac``, not
+        that any hmac still matches its content.
+        """
+        result = verify_exported_records(_chain(3))
+        assert result.detail == "contiguous, in order, chain-linked"
+        assert "unmodified" not in result.detail
+
     def test_verifier_detects_a_deleted_record_in_an_exported_batch(self) -> None:
         entries = _chain(5)
         del entries[2]  # delete the record at sequence 2

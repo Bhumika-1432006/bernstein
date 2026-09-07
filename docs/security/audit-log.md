@@ -709,7 +709,11 @@ batch's chain-head hmac. `FileExporter` writes it as a trailing
 
 `bernstein audit verify-export <file>` reads that file back and reports
 whether it is contiguous, has a gap, was reordered, or was tampered with
--- using only the file and, optionally, the signer's public key:
+-- using only the file and, optionally, the signer's public key. An
+export produced before #5034 has no `sequence` field on its records, which
+reads as `sequence 0` on every record and is reported as `REORDERED` --
+that label means "this export predates the feature", not "records were
+reordered"; re-export with the current build to check it properly.
 
 ```bash
 bernstein audit verify-export .sdd/exports/audit.jsonl
@@ -717,10 +721,25 @@ bernstein audit verify-export .sdd/exports/audit.jsonl --public-key signer-publi
 ```
 
 Without `--public-key`, each receipt's embedded key is trusted on first
-use. With it, a receipt signed by any other key is reported as
-`TAMPERED`. This is the property that makes the SIEM copy a portable,
-offline-verifiable segment of the chain rather than just a log: a SOC
-analyst or auditor can check it for themselves.
+use -- the command's `PASSED` panel says so explicitly (`Trust: signer
+trusted on first use -- authenticity NOT verified, re-run with
+--public-key`), because an attacker who rewrites the export and re-signs
+every receipt with their own key passes an unpinned check. Pin the signer
+with `--public-key` to actually verify authenticity: a receipt signed by
+any other key is then reported as `TAMPERED`. An export with no segment
+receipts at all reports `Trust: no segment receipts -- sequence continuity
+only` -- there is no signature evidence to check in that case.
+
+What the command proves either way is that the export is **contiguous, in
+order, and chain-linked**: each record's `prev_hmac` matches the previous
+record's stored `hmac`. It does not recompute any record's `hmac` from its
+content, so it cannot detect a record whose `details` were edited while
+its stored `hmac` was left alone -- that is a content-integrity question,
+answered only by `bernstein audit verify` against the source database and
+the HMAC signing key. This is the property that makes the SIEM copy a
+portable, offline-verifiable segment of the chain rather than just a log:
+a SOC analyst or auditor can check completeness and order for themselves,
+without holding the key.
 
 ### Sample dashboards
 

@@ -24,8 +24,13 @@ HMAC, signed with the same Ed25519 key used for lineage (reusing
 :mod:`bernstein.core.security.audit_head_signature`, not new signing code).
 :func:`verify_exported_records` then lets a receiver -- no database, no
 HMAC key, just the exported file and the signer's public key -- confirm
-the batch is contiguous, in order, and unmodified. ``bernstein audit
-verify-export`` (``cli/commands/audit_cmd.py``) is the CLI surface over it.
+the batch is contiguous, in order, and chain-linked. That is not the same
+claim as "record contents are unmodified": the verifier checks that each
+record's ``prev_hmac`` chains onto the previous record's stored ``hmac``,
+never that the stored ``hmac`` itself still matches the record's content --
+doing that needs the HMAC signing key, via ``bernstein audit verify``.
+``bernstein audit verify-export`` (``cli/commands/audit_cmd.py``) is the
+CLI surface over :func:`verify_exported_records`.
 """
 
 from __future__ import annotations
@@ -381,11 +386,15 @@ def verify_exported_records(
     *,
     trusted_public_key_jwk: dict[str, Any] | None = None,
 ) -> ExportVerification:
-    """Check an exported batch for deletion, reordering, and tampering.
+    """Check an exported batch for deletion, reordering, and chain tampering.
 
     Works on the export alone -- no source database, no HMAC key. Entries
     are checked in the order given (never re-sorted, since silently
     correcting the order would hide the very defect this exists to catch).
+    "Tampering" here means the chain linkage or a segment receipt's
+    signature -- a record whose ``details`` were edited with its stored
+    ``hmac`` left untouched is not detectable from the export alone; that
+    needs the signing key, via ``bernstein audit verify``.
 
     Args:
         entries: Exported records, in file order.
@@ -465,7 +474,9 @@ def verify_exported_records(
                 at_sequence=prev_receipt.last_sequence + 1,
             )
 
-    return ExportVerification(ok=True, status=ExportVerifyStatus.CONTIGUOUS, detail="contiguous, in order, unmodified")
+    return ExportVerification(
+        ok=True, status=ExportVerifyStatus.CONTIGUOUS, detail="contiguous, in order, chain-linked"
+    )
 
 
 # ---------------------------------------------------------------------------

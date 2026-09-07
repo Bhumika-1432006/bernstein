@@ -357,21 +357,41 @@ def _write_export(tmp_path: Path, *, entry_count: int = 3, kms_adapter: FileBase
 
 
 def test_verify_export_passes_on_a_contiguous_unsigned_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No segment receipts at all: the panel must say so, not read like an authenticity result."""
     monkeypatch.chdir(tmp_path)
     export_path = _write_export(tmp_path)
     runner = CliRunner()
     result = runner.invoke(audit_group, ["verify-export", str(export_path)])
     assert result.exit_code == 0, result.output
     assert "PASSED" in result.output
+    assert "no segment receipts" in result.output.lower()
 
 
 def test_verify_export_passes_with_a_signed_segment_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No --public-key given: the panel must say trust-on-first-use, not just PASSED."""
     monkeypatch.chdir(tmp_path)
     export_path = _write_export(tmp_path, kms_adapter=_kms(tmp_path))
     runner = CliRunner()
     result = runner.invoke(audit_group, ["verify-export", str(export_path)])
     assert result.exit_code == 0, result.output
     assert "PASSED" in result.output
+    assert "trusted on first use" in result.output.lower()
+    assert "authenticity not verified" in result.output.lower()
+
+
+def test_verify_export_with_pinned_key_reports_signer_pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--public-key given and matching: the panel must distinguish this from trust-on-first-use."""
+    monkeypatch.chdir(tmp_path)
+    kms = _kms(tmp_path)
+    export_path = _write_export(tmp_path, kms_adapter=kms)
+    key_path = tmp_path / "trusted-public.json"
+    key_path.write_text(json.dumps(kms.public_key_jwk()), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(audit_group, ["verify-export", str(export_path), "--public-key", str(key_path)])
+    assert result.exit_code == 0, result.output
+    assert "PASSED" in result.output
+    assert "signer pinned" in result.output.lower()
 
 
 def test_verify_export_detects_a_deleted_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -401,6 +421,27 @@ def test_verify_export_rejects_an_untrusted_signer(tmp_path: Path, monkeypatch: 
     )
     assert result.exit_code == 1, result.output
     assert "TAMPERED" in result.output
+
+
+def test_verify_export_with_a_malformed_line_reports_incomplete_not_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A line that cannot be parsed must not disappear into a silent green PASSED.
+
+    A corrupt line is excluded from the sequence-continuity check entirely,
+    so nothing else can prove the export is complete once one is skipped --
+    the run must say INCOMPLETE and exit non-zero rather than PASSED.
+    """
+    monkeypatch.chdir(tmp_path)
+    export_path = _write_export(tmp_path, entry_count=3)
+    with export_path.open("a", encoding="utf-8") as fh:
+        fh.write("{not valid json\n")
+
+    runner = CliRunner()
+    result = runner.invoke(audit_group, ["verify-export", str(export_path)])
+    assert result.exit_code == 1, result.output
+    assert "INCOMPLETE" in result.output
+    assert "PASSED" not in result.output
 
 
 def test_verify_export_missing_file_exits_nonzero() -> None:
