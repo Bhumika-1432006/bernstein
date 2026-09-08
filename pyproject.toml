@@ -790,7 +790,7 @@ languages = ["zh-Hans", "zh-TW", "ja", "ko", "hi", "bn", "ru", "es", "pt", "de",
 "ar" = "@thegoodengineer"
 "he" = "@chernistry"
 "id" = "@thegoodengineer"
-"vi" = "@chernistry"
+"vi" = "@Bhumika-1432006"
 "th" = "@chernistry"
 
 [tool.pytest.ini_options]
