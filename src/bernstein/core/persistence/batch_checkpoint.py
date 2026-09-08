@@ -27,9 +27,11 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 #: SHA-256 hex digest of the empty string — the genesis ``prev_hash``.
 GENESIS_HASH: str = "0" * 64
@@ -41,7 +43,7 @@ def _sha256_hex(data: bytes) -> str:
 
 def _entry_hash(prev_hash: str, entity_id: str, succeeded_at: str) -> str:
     """Derive the chain hash for one ledger entry."""
-    payload = f"{prev_hash}\x00{entity_id}\x00{succeeded_at}".encode("utf-8")
+    payload = f"{prev_hash}\x00{entity_id}\x00{succeeded_at}".encode()
     return _sha256_hex(payload)
 
 
