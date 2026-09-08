@@ -90,8 +90,8 @@ def idempotency_key(entity_id: str, desired_value: str) -> str:
     Returns:
         A hex-encoded SHA-256 digest string.
     """
-    value_digest = _sha256_hex(desired_value.encode("utf-8"))
-    raw = f"{entity_id}:{value_digest}".encode("utf-8")
+    value_digest = _sha256_hex(desired_value.encode())
+    raw = f"{entity_id}:{value_digest}".encode()
     return _sha256_hex(raw)
 
 
