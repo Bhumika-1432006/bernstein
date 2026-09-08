@@ -196,7 +196,9 @@ def test_out_of_tree_path_lands_in_separate_set(tmp_path: Path) -> None:
     result = derive_read_paths(path, tmp_path)
 
     assert result.read_paths == frozenset({"src/foo.py"})
-    assert result.out_of_tree == frozenset({str(outside)})
+    # out_of_tree is documented as "Absolute POSIX paths"; compare in POSIX form
+    # so the assertion holds on Windows (backslash separators) and POSIX alike.
+    assert result.out_of_tree == frozenset({outside.as_posix()})
 
 
 def test_determinism_across_insertion_orders(tmp_path: Path) -> None:
