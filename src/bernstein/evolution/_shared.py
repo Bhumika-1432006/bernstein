@@ -130,7 +130,6 @@ def to_types_proposal(
     )
 
 
-
 def log_experiment(experiments_path: Path, result: ExperimentResult) -> None:
     """Append experiment result to experiments.jsonl.
 
