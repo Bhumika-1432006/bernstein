@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -29,6 +30,16 @@ FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "probe" / "probe_re
 SMOKE_PROMPT = "describe the public fixture"
 SMOKE_MODEL = "fixture-model"
 
+# Issue #5647: the fixture is a `.py` file relying on its `#!/usr/bin/env
+# python3` shebang to be directly executable. That only works on POSIX --
+# Windows has no shebang interpretation, so `subprocess.run([str(FIXTURE),
+# ...])` fails with `FileNotFoundError [WinError 2]` before the fixture ever
+# runs. Invoking it through the current interpreter as a subcommand
+# (`build_argv` already emits `[binary, *subcommands, ...]`) is portable and
+# changes nothing about what the fixture receives or how it behaves.
+_FIXTURE_BINARY = sys.executable
+_FIXTURE_SUBCOMMANDS: tuple[str, ...] = (str(FIXTURE),)
+
 
 def _profile(*, extra_args: tuple[str, ...] = ()) -> AdapterCapabilityProfile:
     """Build the fixture profile used by the onboarding tests."""
@@ -36,7 +47,8 @@ def _profile(*, extra_args: tuple[str, ...] = ()) -> AdapterCapabilityProfile:
         name="recordable-fixture",
         display_name="Recordable Fixture",
         invocation=InvocationSpec(
-            binary=str(FIXTURE),
+            binary=_FIXTURE_BINARY,
+            subcommands=_FIXTURE_SUBCOMMANDS,
             model_flag="--model",
             prompt_flag="--prompt",
             prompt_positional=False,
@@ -45,7 +57,7 @@ def _profile(*, extra_args: tuple[str, ...] = ()) -> AdapterCapabilityProfile:
     )
 
 
-def _write_evidence(path: Path, *, binary: str = str(FIXTURE)) -> Path:
+def _write_evidence(path: Path, *, binary: str = _FIXTURE_BINARY) -> Path:
     """Write a synthetic probe record without running the probing step."""
     document = {
         "binary": binary,
