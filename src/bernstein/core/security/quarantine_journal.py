@@ -57,12 +57,14 @@ def _canonical(obj: Any) -> bytes:
 
 def _compute_entry_hash(prev_hash: str, event_type: str, task_title: str, timestamp: str) -> str:
     """Derive the chain hash for one journal entry."""
-    payload = _canonical({
-        "event_type": event_type,
-        "prev_hash": prev_hash,
-        "task_title": task_title,
-        "timestamp": timestamp,
-    })
+    payload = _canonical(
+        {
+            "event_type": event_type,
+            "prev_hash": prev_hash,
+            "task_title": task_title,
+            "timestamp": timestamp,
+        }
+    )
     return _sha256_hex(payload)
 
 
@@ -161,19 +163,11 @@ class QuarantineJournal:
         errors: list[str] = []
         prev_hash = GENESIS_HASH
         for index, entry in enumerate(entries):
-            expected = _compute_entry_hash(
-                prev_hash, entry.event_type, entry.task_title, entry.timestamp
-            )
+            expected = _compute_entry_hash(prev_hash, entry.event_type, entry.task_title, entry.timestamp)
             if entry.prev_hash != prev_hash:
-                errors.append(
-                    f"entry[{index}]: prev_hash mismatch "
-                    f"(expected {prev_hash!r}, got {entry.prev_hash!r})"
-                )
+                errors.append(f"entry[{index}]: prev_hash mismatch (expected {prev_hash!r}, got {entry.prev_hash!r})")
             if entry.entry_hash != expected:
-                errors.append(
-                    f"entry[{index}]: entry_hash mismatch "
-                    f"(expected {expected!r}, got {entry.entry_hash!r})"
-                )
+                errors.append(f"entry[{index}]: entry_hash mismatch (expected {expected!r}, got {entry.entry_hash!r})")
             prev_hash = entry.entry_hash
         return errors
 
@@ -216,6 +210,7 @@ class QuarantineJournal:
         """
         if not timestamp:
             from datetime import UTC, datetime
+
             timestamp = datetime.now(tz=UTC).isoformat()
         return self._append("quarantined", task_title, timestamp, reason)
 
@@ -232,6 +227,7 @@ class QuarantineJournal:
         """
         if not timestamp:
             from datetime import UTC, datetime
+
             timestamp = datetime.now(tz=UTC).isoformat()
         return self._append("released", task_title, timestamp, reason)
 
@@ -248,5 +244,6 @@ class QuarantineJournal:
         """
         if not timestamp:
             from datetime import UTC, datetime
+
             timestamp = datetime.now(tz=UTC).isoformat()
         return self._append("expired", task_title, timestamp, reason)
