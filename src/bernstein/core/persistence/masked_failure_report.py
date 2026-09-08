@@ -44,11 +44,13 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 #: Terminal kinds that end an attempt sequence for a task.
-_TERMINAL_KINDS: frozenset[str] = frozenset({
-    KIND_TASK_COMPLETED,
-    KIND_TASK_FAILED,
-    KIND_TASK_ABANDONED,
-})
+_TERMINAL_KINDS: frozenset[str] = frozenset(
+    {
+        KIND_TASK_COMPLETED,
+        KIND_TASK_FAILED,
+        KIND_TASK_ABANDONED,
+    }
+)
 
 #: The kind that counts as a successful terminal outcome.
 _SUCCESS_KIND: str = KIND_TASK_COMPLETED
