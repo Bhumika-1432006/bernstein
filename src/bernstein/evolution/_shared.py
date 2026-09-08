@@ -153,6 +153,15 @@ def log_deferred(deferred_path: Path, proposal: UpgradeProposal, reason: str) ->
         proposal: The deferred proposal.
         reason: Reason for deferral.
     """
+    contract_obj = getattr(proposal, "contract", None)
+    contract_component: str | None = contract_obj.component if contract_obj is not None else None
+
+    sandbox_raw = getattr(proposal, "sandbox_result", None)
+    if isinstance(sandbox_raw, dict):
+        sandbox_verdict: str | None = "passed" if sandbox_raw.get("passed") else "failed"
+    else:
+        sandbox_verdict = None
+
     record = {
         "proposal_id": proposal.id,
         "title": proposal.title,
@@ -161,6 +170,8 @@ def log_deferred(deferred_path: Path, proposal: UpgradeProposal, reason: str) ->
         "confidence": proposal.confidence,
         "reason": reason,
         "deferred_at": time.time(),
+        "contract_component": contract_component,
+        "sandbox_verdict": sandbox_verdict,
     }
     try:
         with deferred_path.open("a", encoding="utf-8") as f:
