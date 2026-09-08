@@ -93,9 +93,7 @@ class LaneManifest:
         if not (MIN_PRIORITY <= self.priority <= MAX_PRIORITY):
             raise LaneError(f"priority must be in [{MIN_PRIORITY}, {MAX_PRIORITY}]; got {self.priority}")
         if not (1 <= self.max_concurrency <= MAX_LANE_CONCURRENCY):
-            raise LaneError(
-                f"max_concurrency must be in [1, {MAX_LANE_CONCURRENCY}]; got {self.max_concurrency}"
-            )
+            raise LaneError(f"max_concurrency must be in [1, {MAX_LANE_CONCURRENCY}]; got {self.max_concurrency}")
         if not self.created_at:
             raise LaneError("created_at must be a non-empty ISO 8601 timestamp")
 
