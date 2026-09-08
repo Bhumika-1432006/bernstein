@@ -67,6 +67,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from bernstein.core.path_scope import glob_subsumes
 from bernstein.core.security.agent_card_signer import canonicalize_jcs
 from bernstein.core.security.capability_tokens import (
     allowlist_narrows,
@@ -182,15 +183,11 @@ class DelegationScope:
     ``permissions`` and ``duties`` are plain sets: an empty set is the
     narrowest possible grant, never the widest.
 
-    ``allowed_files`` is recorded and deliberately not graded.  It is a glob
-    field, and a glob is not a path prefix: ``path_prefixes`` narrows by
-    ancestry, where ``src`` covers ``src/core``, while ``src`` as a pattern
-    admits the path ``src`` and nothing under it.  Comparing one with the
-    other primitive would report "narrowing checked and held" for an axis
-    where only the patterns that happened to have a prefix form were checked,
-    so the axis is carried verbatim and grades
-    :data:`REASON_COMPARISON_AXIS_UNSUPPORTED` until a glob-subsumption
-    primitive exists to decide it (#5351, follow-up #5418).
+    ``allowed_files`` is graded via glob subsumption (#5418): a child's pattern
+    set must be subsumed by the parent's.  Unlike ``path_prefixes`` (which uses
+    prefix ancestry), this checks whether the parent's globs admit every path
+    the child's globs could admit, using the same pattern language as
+    :func:`~bernstein.core.path_scope.paths_outside_scope`.
     """
 
     permissions: frozenset[str] = frozenset()
@@ -263,10 +260,10 @@ def narrowing_violations(child: DelegationScope, parent: DelegationScope) -> tup
     Axis names are stable identifiers so a verifier can report *which* axis was
     widened instead of a bare pass/fail.
 
-    ``allowed_files`` is deliberately absent: no primitive here decides whether
-    one glob is contained in another, and a comparison this function cannot
-    make is not one it reports as held.  A hop recording that axis is graded
-    unproven on it instead, by the unsupported-axis rule below.
+    ``allowed_files`` is now graded via glob subsumption (#5418): the child's
+    patterns must be subsumed by the parent's patterns.  ``None`` on the parent
+    means "no restriction" (admits everything), so any child value narrows; ``None``
+    on the child means "no files claimed", which is always a subset.
     """
     axes: list[str] = []
     if not child.permissions <= parent.permissions:
@@ -277,6 +274,8 @@ def narrowing_violations(child: DelegationScope, parent: DelegationScope) -> tup
         axes.append("task_ids")
     if not prefixes_narrow(child.path_prefixes, parent.path_prefixes):
         axes.append("path_prefixes")
+    if not _allowed_files_narrow(child.allowed_files, parent.allowed_files):
+        axes.append("allowed_files")
     if not bound_narrows(child.not_after, parent.not_after):
         axes.append("not_after")
     if not uses_narrows(child.max_uses, parent.max_uses):
@@ -284,6 +283,24 @@ def narrowing_violations(child: DelegationScope, parent: DelegationScope) -> tup
     if not bound_narrows(child.max_depth, parent.max_depth):
         axes.append("max_depth")
     return tuple(axes)
+
+
+def _allowed_files_narrow(
+    child: frozenset[str] | None,
+    parent: frozenset[str] | None,
+) -> bool:
+    """Return True when the child's file scope is contained within the parent's.
+
+    Semantics mirror the other narrowing helpers:
+    - parent ``None`` means no restriction; any child value is a subset.
+    - child ``None`` means no files claimed; that is always a subset.
+    - Otherwise delegate to :func:`~bernstein.core.path_scope.glob_subsumes`.
+    """
+    if parent is None:
+        return True
+    if child is None:
+        return True
+    return glob_subsumes(sorted(parent), sorted(child))
 
 
 # ---------------------------------------------------------------------------
@@ -838,12 +855,10 @@ VERDICT_DIAGNOSTICS: frozenset[str] = frozenset({DIAGNOSTIC_SCOPE_REF_ONLY_RESOL
 #: compared, and a widening found on one of them fails the hop, fail dominating
 #: unproven.
 #:
-#: ``allowed_files`` is a first-party axis deliberately outside this set:
-#: :meth:`DelegationScope.from_body` reads it, but nothing here can decide glob
-#: containment, so it is recorded and graded unproven by the same rule that
-#: covers a key from a future version (#5351, follow-up #5418).
+#: ``allowed_files`` is now graded via glob subsumption (#5418).
 SCOPE_BODY_KEYS: frozenset[str] = frozenset(
     {
+        "allowed_files",
         "duties",
         "max_depth",
         "max_uses",

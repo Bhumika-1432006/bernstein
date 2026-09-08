@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ScopePatternError",
+    "glob_subsumes",
     "normalise_repo_path",
     "paths_outside_scope",
     "validate_repo_relative_pattern",
@@ -218,3 +219,41 @@ def paths_outside_scope(paths: Iterable[str], patterns: Sequence[str]) -> tuple[
         if not _admits(path, patterns):
             outside.append(path)
     return tuple(outside)
+
+
+def glob_subsumes(parent: Sequence[str], child: Sequence[str]) -> bool:
+    """Return True when every path admitted by *child* is also admitted by *parent*.
+
+    This decides the ``allowed_files`` narrowing axis for delegation receipts
+    (#5418): a child agent's file scope is valid when the parent's scope
+    subsumes it.
+
+    The algorithm treats each child pattern as a path and checks whether
+    the parent patterns admit it.  For the restricted pattern language
+    defined in this module (``*`` / ``?`` within one segment, ``**`` as a
+    whole segment), this is correct: a parent pattern ``p`` written as
+    ``a/**`` generates the regex ``a(?:/.*)?``, which matches the string
+    ``a/b/**`` because ``b/**`` is a valid continuation of ``a/``.
+    Conversely ``other/**`` is not matched by ``a/(?:.*)?``, so a scope
+    claiming ``other/**`` under a parent that only grants ``a/**`` reports
+    a widening.
+
+    Edge cases:
+    - Empty *parent* and non-empty *child*: widening (parent grants nothing,
+      child claims something).
+    - Empty *child*: no widening (no grant is a strict subset of anything).
+    - Parent ``None`` / child ``None`` semantics are handled by the caller
+      (:func:`allowed_files_narrow`).
+
+    Args:
+        parent: Glob patterns from the parent's ``allowed_files`` field.
+        child: Glob patterns from the child's ``allowed_files`` field.
+
+    Returns:
+        ``True`` if the child scope is contained within the parent scope.
+    """
+    if not child:
+        return True
+    if not parent:
+        return False
+    return all(_admits(normalise_repo_path(c) or c, parent) for c in child)

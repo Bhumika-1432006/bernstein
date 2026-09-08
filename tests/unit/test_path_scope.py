@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from bernstein.core.path_scope import normalise_repo_path, paths_outside_scope
+from bernstein.core.path_scope import glob_subsumes, normalise_repo_path, paths_outside_scope
 
 
 def test_an_empty_scope_admits_every_path() -> None:
@@ -149,3 +149,54 @@ def test_repeated_double_stars_say_nothing_the_first_did_not() -> None:
     fail: silently narrower rather than loudly wrong.
     """
     assert paths_outside_scope(["a/b", "a/x/y/b"], ["a/**/**/b"]) == ()
+
+
+# ---------------------------------------------------------------------------
+# glob_subsumes (#5418)
+# ---------------------------------------------------------------------------
+
+
+def test_glob_subsumes_subtree_inside_parent_tree() -> None:
+    assert glob_subsumes(["src/**"], ["src/core/**"]) is True
+
+
+def test_glob_subsumes_exact_match() -> None:
+    assert glob_subsumes(["src/**"], ["src/**"]) is True
+
+
+def test_glob_subsumes_single_file_inside_tree() -> None:
+    assert glob_subsumes(["src/**"], ["src/core/foo.py"]) is True
+
+
+def test_glob_subsumes_sibling_tree_is_not_subsumed() -> None:
+    assert glob_subsumes(["src/**"], ["other/**"]) is False
+
+
+def test_glob_subsumes_empty_child_is_always_subsumed() -> None:
+    assert glob_subsumes(["src/**"], []) is True
+
+
+def test_glob_subsumes_empty_parent_with_nonempty_child_is_not_subsumed() -> None:
+    assert glob_subsumes([], ["src/**"]) is False
+
+
+def test_glob_subsumes_both_empty() -> None:
+    assert glob_subsumes([], []) is True
+
+
+def test_glob_subsumes_multiple_parents_one_covering_child() -> None:
+    assert glob_subsumes(["docs/**", "src/**"], ["src/core/**"]) is True
+
+
+def test_glob_subsumes_multiple_children_all_inside_parent() -> None:
+    assert glob_subsumes(["src/**"], ["src/core/**", "src/tests/**"]) is True
+
+
+def test_glob_subsumes_multiple_children_one_outside_parent() -> None:
+    assert glob_subsumes(["src/**"], ["src/core/**", "other/**"]) is False
+
+
+def test_glob_subsumes_bare_double_star_admits_everything() -> None:
+    """``**`` as a parent admits any child pattern."""
+    assert glob_subsumes(["**"], ["src/**"]) is True
+    assert glob_subsumes(["**"], ["other/deep/file.py"]) is True
