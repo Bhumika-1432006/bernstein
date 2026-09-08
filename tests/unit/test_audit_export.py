@@ -362,6 +362,56 @@ class TestVerifyExportedRecords:
         assert not result.ok
         assert result.status == ExportVerifyStatus.TAMPERED
 
+    def test_verifier_detects_a_whole_batch_deleted_while_its_receipt_survives(self, tmp_path: Path) -> None:
+        """The gap a signature check alone cannot see: every entry one receipt attests to is gone.
+
+        Before this fix, ``by_sequence.get(receipt.last_sequence)`` returned
+        ``None`` for a deleted entry, and the guard clause
+        (``if head_entry is not None and ...``) treated "nothing to compare"
+        as "nothing wrong" -- a receipt whose entire batch had been deleted
+        verified as signed and CONTIGUOUS, as long as some other batch's
+        entries were still present to keep ``entries`` non-empty. Load-bearing.
+        """
+        kms = _kms(tmp_path)
+        batch_a = [
+            _make_entry(hmac=_hex_hmac(i), prev_hmac=_hex_hmac(i - 1) if i else "", sequence=i) for i in range(5)
+        ]  # sequence 0-4, entirely deleted below
+        batch_b = [
+            _make_entry(hmac=_hex_hmac(i), prev_hmac=_hex_hmac(i - 1), sequence=i) for i in range(5, 8)
+        ]  # sequence 5-7, survives
+        receipt_a = build_segment_receipt(batch_a, kms_adapter=kms)
+        receipt_b = build_segment_receipt(batch_b, kms_adapter=kms)
+
+        # batch_a's own entries are gone; only its signed receipt survives,
+        # alongside batch_b's entries and receipt (both intact).
+        result = verify_exported_records(batch_b, [receipt_a, receipt_b])
+
+        assert not result.ok
+        assert result.status == ExportVerifyStatus.GAP
+
+    def test_verifier_detects_a_partially_deleted_batch_behind_a_surviving_receipt(self, tmp_path: Path) -> None:
+        """A receipt's tail entries deleted, its earlier entries left in place, still verifies clean without this fix."""
+        kms = _kms(tmp_path)
+        batch = _chain(5)  # sequence 0-4
+        receipt = build_segment_receipt(batch, kms_adapter=kms)
+        surviving = batch[:2]  # sequence 0, 1 only -- 2, 3, 4 deleted, including the receipt's own chain head
+
+        result = verify_exported_records(surviving, [receipt])
+
+        assert not result.ok
+        assert result.status == ExportVerifyStatus.GAP
+
+    def test_verifier_rejects_a_receipt_with_no_entries_at_all(self, tmp_path: Path) -> None:
+        """An export reduced to nothing but a lone surviving receipt is not "nothing to verify"."""
+        kms = _kms(tmp_path)
+        batch = _chain(3)
+        receipt = build_segment_receipt(batch, kms_adapter=kms)
+
+        result = verify_exported_records([], [receipt])
+
+        assert not result.ok
+        assert result.status == ExportVerifyStatus.GAP
+
     def test_verifier_rejects_a_receipt_from_an_untrusted_key(self, tmp_path: Path) -> None:
         real_kms = _kms(tmp_path)
         other_key_path = tmp_path / "other.pem"

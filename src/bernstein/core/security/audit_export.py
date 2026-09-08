@@ -35,6 +35,7 @@ CLI surface over :func:`verify_exported_records`.
 
 from __future__ import annotations
 
+import bisect
 import itertools
 import json
 import logging
@@ -411,6 +412,21 @@ def verify_exported_records(
         ``CONTIGUOUS`` / ``ok=True`` result when none is.
     """
     if not entries:
+        if segment_receipts:
+            # A signed receipt with nothing behind it at all -- the whole
+            # export was deleted and the receipt is the only survivor. An
+            # empty entries list is not "nothing to verify" when a receipt
+            # says otherwise.
+            earliest = min(segment_receipts, key=lambda r: r.first_sequence)
+            return ExportVerification(
+                ok=False,
+                status=ExportVerifyStatus.GAP,
+                detail=(
+                    f"segment receipt covers sequence {earliest.first_sequence}-{earliest.last_sequence}, "
+                    "but the export carries no records at all"
+                ),
+                at_sequence=earliest.first_sequence,
+            )
         return ExportVerification(ok=True, status=ExportVerifyStatus.CONTIGUOUS, detail="no records to verify")
 
     for prev, curr in itertools.pairwise(entries):
@@ -437,6 +453,7 @@ def verify_exported_records(
             )
 
     by_sequence = {entry.sequence: entry for entry in entries}
+    present_sequences = sorted(by_sequence)
     ordered_receipts = sorted(segment_receipts, key=lambda r: r.first_sequence)
     for receipt in ordered_receipts:
         verification = verify_head_signature(
@@ -452,8 +469,36 @@ def verify_exported_records(
                 f"verification: {'; '.join(verification.errors)}",
                 at_sequence=receipt.last_sequence,
             )
-        head_entry = by_sequence.get(receipt.last_sequence)
-        if head_entry is not None and head_entry.hmac != receipt.chain_head_hmac:
+        # The receipt's own claimed span must be fully present. Counting via
+        # bisect over the sorted sequence list -- rather than iterating
+        # range(first_sequence, last_sequence) -- means a corrupt or hostile
+        # receipt claiming an enormous span costs a couple of binary
+        # searches, not an unbounded loop. A batch whose entries were
+        # deleted wholesale (the receipt survives; every entry it attests to
+        # does not) previously passed here silently: `by_sequence.get(...)`
+        # on an absent sequence returned `None`, and `None is not None` is
+        # `False`, so the one check guarding this used to skip entirely
+        # instead of failing.
+        expected_count = receipt.last_sequence - receipt.first_sequence + 1
+        present_count = bisect.bisect_right(present_sequences, receipt.last_sequence) - bisect.bisect_left(
+            present_sequences, receipt.first_sequence
+        )
+        if present_count != expected_count:
+            return ExportVerification(
+                ok=False,
+                status=ExportVerifyStatus.GAP,
+                detail=(
+                    f"segment receipt covers sequence {receipt.first_sequence}-{receipt.last_sequence} "
+                    f"({expected_count} record(s)), but only {present_count} are present in the export -- "
+                    "the batch it attests to was partially or entirely deleted"
+                ),
+                at_sequence=receipt.first_sequence,
+            )
+        # The count check above guarantees last_sequence is present (it is
+        # one of expected_count == present_count matching values drawn from
+        # exactly the claimed span), so this lookup cannot raise.
+        head_entry = by_sequence[receipt.last_sequence]
+        if head_entry.hmac != receipt.chain_head_hmac:
             return ExportVerification(
                 ok=False,
                 status=ExportVerifyStatus.TAMPERED,
