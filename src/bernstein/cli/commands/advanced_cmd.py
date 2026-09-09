@@ -1271,8 +1271,7 @@ def trace_follow_cmd(ctx: click.Context, entity_id: str, as_json: bool) -> None:
 
     if as_json:
         rows: list[tuple[float, str, dict[str, Any]]] = [
-            (entry.started_at, f"trace:{entry.trace_id}", {**entry.to_dict(), "source": "trace"})
-            for entry in matches
+            (entry.started_at, f"trace:{entry.trace_id}", {**entry.to_dict(), "source": "trace"}) for entry in matches
         ]
         rows.extend(
             (entry.ts, f"ledger:{run_id}:{entry.seq}", {**entry.to_dict(), "source": "ledger", "run_id": run_id})
