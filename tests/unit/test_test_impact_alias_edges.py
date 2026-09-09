@@ -373,3 +373,80 @@ def test_an_unrelated_module_does_not_select_the_facade_test(tmp_path: Path) -> 
     )
     _write(src / "proj" / "unrelated.py", "VALUE = 2\n")
     assert _selected_for(tmp_path, src, tests, "src/proj/unrelated.py") == set()
+
+
+# ---------------------------------------------------------------------------
+# Relative-import re-exports (#5111 slice 4, continued)
+# ---------------------------------------------------------------------------
+#
+# Every re-export fixture above writes the facade's import as an absolute
+# dotted path (``from proj.engine import compute``). That is not the form an
+# intra-package re-export is normally written in -- ``from .engine import
+# compute`` or, from a package's own ``__init__.py``, ``from .engine import
+# compute`` again with the package itself as the base -- and the analyser's
+# import extraction never resolved ``node.level``, so a relative import's
+# module name never carried the package prefix the selector matches on. The
+# edge from the defining module through a relatively-imported facade was
+# silently dropped: not routed to the full-suite fallback (a separate,
+# unrelated test already covers the facade module directly, so the "some
+# source changed maps to no test" fail-open path never triggers), just
+# missing from the precise selection with nothing failing.
+
+
+def test_a_relative_reexport_makes_its_importers_affected(tmp_path: Path) -> None:
+    """``from .engine import compute`` -- the ordinary sibling-module re-export."""
+    src, tests = _reexport_fixture(
+        tmp_path,
+        facade_body="from .engine import compute\n",
+        test_body="from proj.facade import compute\n\n\ndef test_it() -> None:\n    assert compute() == 1\n",
+    )
+    # A second, direct-import test so a change to engine.py is already mapped
+    # through it and the fail-open "unmapped source" fallback cannot mask the
+    # missing edge by selecting everything anyway.
+    _write(tests / "test_engine_direct.py", "from proj.engine import compute\n")
+    assert _selected_for(tmp_path, src, tests, "src/proj/engine.py") == {
+        "tests/unit/test_via_facade.py",
+        "tests/unit/test_engine_direct.py",
+    }
+
+
+def test_a_package_init_relative_reexport_makes_its_importers_affected(tmp_path: Path) -> None:
+    """``proj/__init__.py`` doing ``from .engine import compute``.
+
+    A package's own ``__init__.py`` is its own ``__package__`` for relative
+    resolution -- level 1 refers to ``proj`` itself, not ``proj``'s parent --
+    which is the distinction :func:`_resolve_relative_import` has to get
+    right for this, the commonest re-export shape in this codebase, to work.
+    """
+    src = tmp_path / "src"
+    tests = tmp_path / "tests" / "unit"
+    _write(src / "proj" / "__init__.py", "from .engine import compute\n")
+    _write(src / "proj" / "engine.py", "def compute() -> int:\n    return 1\n")
+    _write(
+        tests / "test_via_facade.py",
+        "from proj import compute\n\n\ndef test_it() -> None:\n    assert compute() == 1\n",
+    )
+    _write(tests / "test_engine_direct.py", "from proj.engine import compute\n")
+    assert _selected_for(tmp_path, src, tests, "src/proj/engine.py") == {
+        "tests/unit/test_via_facade.py",
+        "tests/unit/test_engine_direct.py",
+    }
+
+
+def test_a_two_level_relative_reexport_makes_its_importers_affected(tmp_path: Path) -> None:
+    """``from ..engine import compute`` -- climbing one level up from a subpackage."""
+    src = tmp_path / "src"
+    tests = tmp_path / "tests" / "unit"
+    _write(src / "proj" / "__init__.py", "")
+    _write(src / "proj" / "engine.py", "def compute() -> int:\n    return 1\n")
+    _write(src / "proj" / "sub" / "__init__.py", "")
+    _write(src / "proj" / "sub" / "facade.py", "from ..engine import compute\n")
+    _write(
+        tests / "test_via_facade.py",
+        "from proj.sub.facade import compute\n\n\ndef test_it() -> None:\n    assert compute() == 1\n",
+    )
+    _write(tests / "test_engine_direct.py", "from proj.engine import compute\n")
+    assert _selected_for(tmp_path, src, tests, "src/proj/engine.py") == {
+        "tests/unit/test_via_facade.py",
+        "tests/unit/test_engine_direct.py",
+    }
