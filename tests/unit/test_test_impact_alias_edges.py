@@ -45,6 +45,7 @@ import bernstein.core  # noqa: F401
 from bernstein.core.quality.test_impact import TestImpactAnalyzer as ImpactAnalyzer
 from bernstein.core.quality.test_impact import (
     _real_module_names,
+    _resolve_relative_import,
     build_compat_dep_map,
     compat_get_affected_tests,
     discover_module_aliases,
@@ -450,3 +451,63 @@ def test_a_two_level_relative_reexport_makes_its_importers_affected(tmp_path: Pa
         "tests/unit/test_via_facade.py",
         "tests/unit/test_engine_direct.py",
     }
+
+
+# ---------------------------------------------------------------------------
+# _resolve_relative_import: direct unit coverage (review follow-up, #5111)
+# ---------------------------------------------------------------------------
+#
+# The fixtures above exercise this function only indirectly, through three
+# end-to-end selection tests that each build a tree, run the analyser, and
+# compare file sets -- the right *integration* coverage, but an expensive way
+# to pin pure arithmetic. A reviewer's manual trace caught a `>` that should
+# have been `>=`: when a relative import climbs exactly as many levels as the
+# current module has parent segments (not just past them), the old check let
+# it through and returned a fabricated top-level module name instead of
+# `None`. The same off-by-one made every relative import in a bare top-level
+# module (no enclosing package at all) resolve to a fabricated name too,
+# since an empty `package_parts` never satisfied the strict `>`.
+
+
+def test_level_one_resolves_against_the_full_package() -> None:
+    assert _resolve_relative_import(current_module="a.b.c", is_package_init=False, level=1, module="d") == "a.b.d"
+
+
+def test_level_two_climbs_one_parent() -> None:
+    assert _resolve_relative_import(current_module="a.b.c", is_package_init=False, level=2, module="e") == "a.e"
+
+
+def test_a_packages_own_init_is_its_own_package_for_level_one() -> None:
+    """``a/b/__init__.py``'s own package is ``a.b``, not ``a`` -- the case almost everyone gets wrong first time."""
+    assert _resolve_relative_import(current_module="a.b", is_package_init=True, level=1, module="c") == "a.b.c"
+
+
+def test_climbing_exactly_to_the_top_returns_none_not_a_fabricated_name() -> None:
+    """The off-by-one: ``strip == len(package_parts)`` must refuse, not silently succeed.
+
+    ``a/b/c.py``'s package is ``a.b`` (two segments). A level-3 import strips
+    two segments, landing exactly on nothing left to resolve against --
+    Python raises ``ImportError`` here, so this must not return a bare
+    ``"d"`` as if ``d`` were a real top-level module.
+    """
+    assert _resolve_relative_import(current_module="a.b.c", is_package_init=False, level=3, module="d") is None
+
+
+def test_climbing_past_the_top_returns_none() -> None:
+    assert _resolve_relative_import(current_module="a.b.c", is_package_init=False, level=4, module="d") is None
+
+
+def test_a_bare_top_level_module_has_no_package_to_resolve_against() -> None:
+    """``widget.py`` at the source root: even ``level=1`` has nothing to climb from.
+
+    Regression case for the same off-by-one: ``package_parts`` is already
+    empty here (a non-init file strips its own name, leaving nothing), so
+    the boundary check has to fire at ``strip == 0`` too, not only for a
+    deeper climb.
+    """
+    assert _resolve_relative_import(current_module="widget", is_package_init=False, level=1, module="sibling") is None
+
+
+def test_bare_from_dot_import_with_no_named_module() -> None:
+    """``from . import x`` -- ``module`` is ``None`` on the AST node, not empty string."""
+    assert _resolve_relative_import(current_module="a.b.c", is_package_init=False, level=1, module=None) == "a.b"

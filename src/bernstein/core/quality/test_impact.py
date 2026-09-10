@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 # lists are alias-resolved at write time, so a change to alias discovery makes
 # every existing entry potentially short of edges even though its file hashes
 # still match.
-_ANALYZER_CACHE_VERSION = "4"
-_COMPAT_CACHE_VERSION = "5"
+_ANALYZER_CACHE_VERSION = "5"
+_COMPAT_CACHE_VERSION = "6"
 _WORKFLOW_PATH_PREFIX = ".github/workflows/"
 
 # Upper bound on a harvested path literal. Long strings in a test are prose,
@@ -153,17 +153,21 @@ def _resolve_relative_import(
     Mirrors Python's own resolution: a package's ``__init__.py`` counts as the
     package itself for ``__package__`` purposes, so ``level=1`` there refers to
     the package's own directory rather than its parent. Returns ``None`` when
-    the import climbs above the project root (more ``.``s than the current
-    module has parent segments) -- undecidable, so the caller drops the edge
-    exactly as it already does for a module it cannot resolve at all.
+    the import climbs to or above the project root (as many ``.``s as, or more
+    than, the current module has parent segments) -- undecidable, so the
+    caller drops the edge exactly as it already does for a module it cannot
+    resolve at all. This also covers a bare top-level module (``package_parts``
+    empty even before stripping): Python has no package for it to import
+    relative to, so *every* relative import there is invalid, not only ones
+    that climb further.
     """
     package_parts = current_module.split(".") if current_module else []
     if not is_package_init:
         package_parts = package_parts[:-1]
     strip = level - 1
+    if strip >= len(package_parts):
+        return None
     if strip:
-        if strip > len(package_parts):
-            return None
         package_parts = package_parts[: len(package_parts) - strip]
     if module:
         return ".".join([*package_parts, module]) if package_parts else module
@@ -1066,7 +1070,23 @@ class TestImpactAnalyzer:
         return resolve_module_aliases(imports, self._aliases)
 
     def _parse_test_imports(self, test_file: Path) -> set[str]:
-        """Parse source dependencies imported by a test file."""
+        """Parse source dependencies imported by a test file.
+
+        Deliberately does not pass ``current_module`` -- a choice, not an
+        impossibility. Test directories are configured separately from
+        ``self._src_root`` (see ``self._test_dirs``) and are not usually
+        importable packages rooted the same way, so a test file has no
+        settled dotted module name to resolve a relative import against the
+        way :meth:`_parse_source_imports` does for source files. A test
+        helper imported relatively (``from .helpers import make_store``)
+        therefore still contributes no edge; that gap is real, but widening
+        this fix to cover it is out of scope here -- the source side is
+        where a relatively-imported facade silently drops selection edges
+        with nothing failing, which is the damage this fix addresses. If a
+        test tree ever gains a dotted root of its own (an ``__init__.py``
+        chain up to a known base), the same ``_path_to_module`` +
+        ``current_module`` technique would apply unchanged.
+        """
         return self._resolved_imports(test_file)
 
     def _parse_source_imports(self, source_file: Path) -> set[str]:
