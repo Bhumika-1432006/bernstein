@@ -41,6 +41,17 @@ def _replay_task_statuses(path: Path) -> dict[str, str]:
     ``TaskStore.__init__`` applies to its own log, for the same reason: one
     torn line from a crash mid-write must not make every other task's status
     unreadable.
+
+    ``errors="replace"`` on the read means a byte-level corruption inside an
+    otherwise-parseable line surfaces as U+FFFD in a decoded field rather
+    than failing to decode at all -- so a mangled ``status`` can survive as
+    a syntactically valid row instead of being skipped like a torn line.
+    That is safe for this module's own use: a mangled value is never a
+    member of ``TERMINAL_STATUSES``, so the task is simply not reported as
+    terminal. It would not be safe for a mangled ``id`` if this predicate
+    ever gates a reap decision rather than only a listing -- a corrupted id
+    should not silently exclude a task from consideration the way a
+    corrupted status safely does here.
     """
     statuses: dict[str, str] = {}
     if not path.is_file():
@@ -66,10 +77,11 @@ def read_task_statuses(sdd_dir: Path) -> dict[str, str]:
     """Return ``{task_id: status}`` for every task the on-disk logs know about.
 
     Reads the live task log first, then the archive; a task id present in
-    both keeps the live log's value only if the archive has no entry for it
-    -- an archived task's own record is its last known status before
-    archival, so archive entries are applied where the live log is silent
-    rather than the other way around.
+    both keeps the *archive's* value. Archival happens once a task has
+    already reached its final status -- the live log's own record for that
+    id can predate archival (whatever it last said before the task was
+    filed away), so the archive is the newer, authoritative one where the
+    two disagree.
 
     Args:
         sdd_dir: The project's ``.sdd`` directory.
@@ -79,13 +91,42 @@ def read_task_statuses(sdd_dir: Path) -> dict[str, str]:
         Empty when neither log exists.
     """
     merged: dict[str, str] = {}
-    for relpath in reversed(_TASK_LOG_RELPATHS):
+    for relpath in _TASK_LOG_RELPATHS:
         merged.update(_replay_task_statuses(sdd_dir / relpath))
     return merged
 
 
+def status_is_terminal(status: str | None) -> bool | None:
+    """Return whether a recorded status string is terminal.
+
+    Pure predicate over an already-looked-up value, so a caller checking
+    many task ids against one already-read :func:`read_task_statuses`
+    mapping (e.g. :func:`bernstein.core.worktrees.leak_sweep.sweep_leaked_worktrees`)
+    can apply it directly instead of going through :func:`task_is_terminal`,
+    which re-reads and re-replays both logs on every call.
+
+    Args:
+        status: A status string from the task log, or ``None`` when no log
+            entry names this task at all.
+
+    Returns:
+        ``True`` for a terminal status (see
+        :data:`bernstein.core.orchestration.run_stall.TERMINAL_STATUSES`),
+        ``False`` for a recorded non-terminal status, and ``None`` for
+        ``status is None`` -- undecidable, not "not terminal".
+    """
+    if status is None:
+        return None
+    return status in TERMINAL_STATUSES
+
+
 def task_is_terminal(sdd_dir: Path, task_id: str) -> bool | None:
     """Return whether *task_id*'s recorded status is terminal.
+
+    Reads and replays both task logs for a single lookup; a caller checking
+    several task ids should read once with :func:`read_task_statuses` and
+    apply :func:`status_is_terminal` to each instead of calling this in a
+    loop.
 
     Args:
         sdd_dir: The project's ``.sdd`` directory.
@@ -93,14 +134,11 @@ def task_is_terminal(sdd_dir: Path, task_id: str) -> bool | None:
 
     Returns:
         ``True`` when the task log's latest record for *task_id* is a
-        terminal status (see :data:`bernstein.core.orchestration.run_stall.TERMINAL_STATUSES`),
-        ``False`` when it is recorded and not terminal, and ``None`` when no
-        log knows this task id at all -- undecidable, not "not terminal".
+        terminal status, ``False`` when it is recorded and not terminal,
+        and ``None`` when no log knows this task id at all -- undecidable,
+        not "not terminal".
     """
-    status = read_task_statuses(sdd_dir).get(task_id)
-    if status is None:
-        return None
-    return status in TERMINAL_STATUSES
+    return status_is_terminal(read_task_statuses(sdd_dir).get(task_id))
 
 
-__all__ = ["read_task_statuses", "task_is_terminal"]
+__all__ = ["read_task_statuses", "status_is_terminal", "task_is_terminal"]

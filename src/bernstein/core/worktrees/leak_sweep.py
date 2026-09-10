@@ -22,9 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from bernstein.core.orchestration.run_stall import TERMINAL_STATUSES
 from bernstein.core.worktrees.classifier import ClassifiedWorktree, classify_worktrees
-from bernstein.core.worktrees.task_status import read_task_statuses
+from bernstein.core.worktrees.task_status import read_task_statuses, status_is_terminal
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -61,7 +60,9 @@ def sweep_leaked_worktrees(
 
     Returns:
         One :class:`LeakedWorktree` per worktree whose task id resolves to a
-        terminal status in the on-disk task log, sorted by session id.
+        terminal status in the on-disk task log, sorted by session id -- a
+        guarantee this function makes itself (not merely inherited from
+        :func:`classify_worktrees`'s own directory-listing order).
     """
     statuses = read_task_statuses(repo_root / ".sdd")
     leaked: list[LeakedWorktree] = []
@@ -69,8 +70,18 @@ def sweep_leaked_worktrees(
         if not worktree.task_id:
             continue
         status = statuses.get(worktree.task_id)
-        if status in TERMINAL_STATUSES:
+        # status_is_terminal's None case (no log entry for this task) and its
+        # False case (a real, recorded, non-terminal status) both mean "do
+        # not list" here -- the three-valued distinction matters for a
+        # future reap gate, not for this listing, which reuses the same
+        # predicate a per-task lookup would rather than re-deriving it. The
+        # `status is not None` clause is what a strict type check needs to
+        # narrow `status: str | None` to `str` for the dataclass below;
+        # `status_is_terminal` returning `True` already guarantees it at
+        # runtime, but not in a way a checker can see through the call.
+        if status is not None and status_is_terminal(status) is True:
             leaked.append(LeakedWorktree(worktree=worktree, task_status=status))
+    leaked.sort(key=lambda entry: entry.worktree.session_id)
     return leaked
 
 
