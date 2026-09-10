@@ -6,6 +6,13 @@
 # pinned by tests/unit/test_openapi_snapshot_drift.py; edit the routes, not
 # the snapshot.
 docs/reference/openapi.json linguist-generated=true
+# The shipped SPA bundle (`npm run build` output). The "shipped bundle
+# matches the lockfile" CI check compares a fresh Linux rebuild against what
+# is committed byte for byte; a Windows checkout with EOL translation on
+# introduces CR bytes a Linux rebuild never produces, so the two never match
+# even when every asset's content hash is identical (discovered landing #5069:
+# only index.html differed, by line endings alone).
+src/bernstein/gui/static/** -text linguist-generated=true
 # README demo evidence: byte-exact artifacts - the receipt's hashes and
 # signature die on any EOL translation, so no checkout may rewrite them.
 docs/assets/demo-run/demo.cast -text linguist-generated
