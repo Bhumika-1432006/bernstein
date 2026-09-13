@@ -1,29 +1,43 @@
 """Journaled quarantine record: append-only audit trail for init failures (#5108).
 
 The :class:`~bernstein.core.security.quarantine.QuarantineStore` overwrites a
-single JSON file on every mutation.  That gives a point-in-time snapshot of
-the current quarantine state but loses the history: when was an entry
-created, how many times was the threshold crossed, when was it released?
+single JSON file on every mutation. That gives a point-in-time snapshot of the
+current quarantine state but loses the history: when was an entry created, how
+many times was the threshold crossed, when was it released?
 
-This module provides a complementary, append-only JSONL journal that sits next
-to the QuarantineStore snapshot file.  Each journal entry captures a single
-state transition (``quarantined``, ``released``, or ``expired``) with a
-timestamp, a reason, and a hash chain linking it to its predecessor.  The
-chain makes truncation detectable: a reader that sees an entry whose
-``prev_hash`` does not match the previous entry's ``entry_hash`` knows the
-journal has been tampered with or truncated.
+This module is a thin wrapper over
+:class:`~bernstein.core.persistence.work_ledger.WorkLedger` -- the append-only,
+hash-chained JSONL primitive this codebase already has, already reviewed,
+already used for the work ledger's own crash-safe replay. An earlier version
+of this module rolled its own chain (hashing four enumerated fields rather
+than the whole entry, with no monotonic index and a ``read()`` that silently
+stopped at the first unparseable line, discarding everything after it without
+reporting an error). Wrapping ``WorkLedger`` instead of maintaining a second,
+weaker implementation fixes all three: ``WorkLedger.append`` hashes the entire
+payload dict (so ``reason`` is covered along with every other field, present
+or future, with no field list to keep in sync), each entry carries a
+monotonic ``seq``, and :meth:`QuarantineJournal.verify` reports every
+unparseable row as a named error and keeps reading past it rather than
+stopping silently.
 
-The journal is write-only for normal operation; :meth:`QuarantineJournal.verify`
-is the audit path.  The store and journal are independent: a caller that only
-wants the current snapshot keeps using
-:class:`~bernstein.core.security.quarantine.QuarantineStore` alone.
+What this does **not** claim: a bare hash chain with no external anchor
+cannot prove it is the *complete* chain -- deleting the tail leaves a shorter
+chain that still verifies, because nothing outside the file says how many
+entries there are supposed to be. That is a structural property of a hash
+chain alone, not a defect specific to this wrapper or to ``WorkLedger``; an
+anchored head (recorded in a run manifest, or chained into the audit_chain
+HMAC store) is what closes it, and is out of scope here.
+
+The store and journal are independent: a caller that only wants the current
+snapshot keeps using :class:`~bernstein.core.security.quarantine.QuarantineStore`
+alone.
 
 Typical use::
 
     from pathlib import Path
     from bernstein.core.security.quarantine_journal import QuarantineJournal
 
-    journal = QuarantineJournal(Path(".sdd/runtime/quarantine-journal.jsonl"))
+    journal = QuarantineJournal(Path(".sdd/runtime/quarantine-journal"))
     journal.record_quarantined("flaky-init-agent", reason="failed 3 times")
     journal.record_released("flaky-init-agent", reason="operator reset")
     errors = journal.verify()   # [] on a valid chain
@@ -31,173 +45,158 @@ Typical use::
 
 from __future__ import annotations
 
-import hashlib
-import json
-import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
+
+from bernstein.core.persistence.work_ledger import (
+    GENESIS_HASH,
+    LedgerReader,
+    WorkLedger,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-#: Event types the journal records.
+    from bernstein.core.persistence.work_ledger import LedgerEntry
+
+__all__ = ["GENESIS_HASH", "QuarantineJournal", "QuarantineJournalEntry"]
+
+#: Event types the journal records. Stored as the ledger kind, namespaced
+#: under ``quarantine.`` so it reads clearly alongside the ledger's own
+#: ``run.``/``task.`` kinds without colliding with their reserved vocabulary.
 QuarantineEventType = Literal["quarantined", "released", "expired"]
 
-#: Sentinel prev_hash for the first journal entry.
-GENESIS_HASH: str = "0" * 64
+_KIND_PREFIX = "quarantine."
 
 
-def _sha256_hex(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+def _kind_for(event_type: QuarantineEventType) -> str:
+    return f"{_KIND_PREFIX}{event_type}"
 
 
-def _canonical(obj: Any) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-
-
-def _compute_entry_hash(prev_hash: str, event_type: str, task_title: str, timestamp: str) -> str:
-    """Derive the chain hash for one journal entry."""
-    payload = _canonical(
-        {
-            "event_type": event_type,
-            "prev_hash": prev_hash,
-            "task_title": task_title,
-            "timestamp": timestamp,
-        }
-    )
-    return _sha256_hex(payload)
+def _event_type_from_kind(kind: str) -> str:
+    return kind.removeprefix(_KIND_PREFIX)
 
 
 @dataclass(frozen=True, slots=True)
-class JournalEntry:
-    """One quarantine state-transition event in the journal.
+class QuarantineJournalEntry:
+    """One quarantine state-transition event, adapted from the underlying ledger entry.
 
     Attributes:
         event_type: The transition: ``quarantined``, ``released``, or ``expired``.
         task_title: Canonical task title the transition concerns.
-        timestamp: ISO 8601 timestamp of the transition.
+        timestamp: Caller-supplied ISO 8601 timestamp of the transition
+            (distinct from the ledger's own wall-clock ``ts``, which is
+            metadata about when the row was written, not the semantic
+            transition time -- see :meth:`QuarantineJournal.record_quarantined`).
         reason: Human-readable reason for the transition.
         prev_hash: Entry hash of the immediately preceding entry, or
             :data:`GENESIS_HASH` for the first entry.
-        entry_hash: SHA-256 chain hash of this entry's payload.
+        entry_hash: Hash chain value of this entry, over the whole payload.
+        seq: Monotonic sequence number -- the index a gap or truncation
+            would break.
     """
 
-    event_type: QuarantineEventType
+    event_type: str
     task_title: str
     timestamp: str
     reason: str
     prev_hash: str
     entry_hash: str
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serialisable dict of this entry."""
-        return {
-            "event_type": self.event_type,
-            "task_title": self.task_title,
-            "timestamp": self.timestamp,
-            "reason": self.reason,
-            "prev_hash": self.prev_hash,
-            "entry_hash": self.entry_hash,
-        }
+    seq: int
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> JournalEntry:
-        """Reconstruct a :class:`JournalEntry` from a parsed JSON object."""
+    def _from_ledger_entry(cls, entry: LedgerEntry) -> QuarantineJournalEntry:
+        payload = entry.payload
         return cls(
-            event_type=data["event_type"],
-            task_title=str(data["task_title"]),
-            timestamp=str(data["timestamp"]),
-            reason=str(data.get("reason", "")),
-            prev_hash=str(data["prev_hash"]),
-            entry_hash=str(data["entry_hash"]),
+            event_type=_event_type_from_kind(entry.kind),
+            task_title=str(payload.get("task_title", "")),
+            timestamp=str(payload.get("timestamp", "")),
+            reason=str(payload.get("reason", "")),
+            prev_hash=entry.prev_hash,
+            entry_hash=entry.entry_hash,
+            seq=entry.seq,
         )
 
 
 class QuarantineJournal:
-    """Append-only, hash-chained JSONL journal for quarantine state transitions.
+    """Append-only, hash-chained journal for quarantine state transitions.
 
-    Thread-safe: a per-instance lock serialises concurrent appends.
+    A thin wrapper over :class:`~bernstein.core.persistence.work_ledger.WorkLedger`;
+    see the module docstring for why. Thread-safety and crash-safety are
+    ``WorkLedger``'s, not reimplemented here.
 
     Args:
-        path: Path to the JSONL journal file.  Created on first write.
+        ledger_dir: Directory the underlying ledger bucket file lives in.
+            Created on first write.
     """
 
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._lock = threading.Lock()
+    def __init__(self, ledger_dir: Path) -> None:
+        self._ledger_dir = ledger_dir
+        self._ledger: WorkLedger | None = None
+
+    def _writer(self) -> WorkLedger:
+        # Opened lazily so constructing a QuarantineJournal never creates the
+        # directory or bucket file for a caller that only ever reads.
+        if self._ledger is None:
+            self._ledger = WorkLedger.open(self._ledger_dir)
+        return self._ledger
+
+    @property
+    def path(self) -> Path:
+        """Path to the underlying ledger bucket file (public, for tests and tooling)."""
+        return LedgerReader(self._ledger_dir).bucket_path
 
     # ------------------------------------------------------------------
     # Read
     # ------------------------------------------------------------------
 
-    def read(self) -> list[JournalEntry]:
+    def read(self) -> list[QuarantineJournalEntry]:
         """Return all journal entries in append order.
 
-        A torn trailing line (write interrupted mid-byte) is silently skipped
-        so a crash during an append never prevents the journal from being read.
+        An unparseable row is skipped here (mirroring
+        :meth:`~bernstein.core.persistence.work_ledger.LedgerReader.entries`'s
+        crash tolerance) so a torn trailing line never prevents the rest of
+        the journal from being read. :meth:`verify` is the path that reports
+        such a row as an error instead of silently omitting it.
 
         Returns:
-            List of :class:`JournalEntry` objects, oldest first.
+            List of :class:`QuarantineJournalEntry` objects, oldest first.
         """
-        if not self._path.exists():
-            return []
-        entries: list[JournalEntry] = []
-        for line in self._path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entries.append(JournalEntry.from_dict(json.loads(line)))
-            except (json.JSONDecodeError, KeyError):
-                break
-        return entries
+        reader = LedgerReader(self._ledger_dir)
+        return [QuarantineJournalEntry._from_ledger_entry(entry) for entry in reader.entries()]
 
     def verify(self) -> list[str]:
         """Verify the hash chain and return a list of error strings.
 
+        Unlike :meth:`read`, an unparseable row is reported here rather than
+        silently skipped, and scanning continues past it -- a single
+        corrupted line does not hide every error after it.
+
         Returns:
             Empty list when the chain is intact; one error string per
-            broken link otherwise.
+            problem otherwise (a broken link, a hash mismatch, or an
+            unparseable row).
         """
-        entries = self.read()
-        errors: list[str] = []
-        prev_hash = GENESIS_HASH
-        for index, entry in enumerate(entries):
-            expected = _compute_entry_hash(prev_hash, entry.event_type, entry.task_title, entry.timestamp)
-            if entry.prev_hash != prev_hash:
-                errors.append(f"entry[{index}]: prev_hash mismatch (expected {prev_hash!r}, got {entry.prev_hash!r})")
-            if entry.entry_hash != expected:
-                errors.append(f"entry[{index}]: entry_hash mismatch (expected {expected!r}, got {entry.entry_hash!r})")
-            prev_hash = entry.entry_hash
-        return errors
-
-    # ------------------------------------------------------------------
-    # Write helpers
-    # ------------------------------------------------------------------
-
-    def _append(self, event_type: QuarantineEventType, task_title: str, timestamp: str, reason: str) -> JournalEntry:
-        with self._lock:
-            existing = self.read()
-            prev_hash = existing[-1].entry_hash if existing else GENESIS_HASH
-            entry_hash = _compute_entry_hash(prev_hash, event_type, task_title, timestamp)
-            entry = JournalEntry(
-                event_type=event_type,
-                task_title=task_title,
-                timestamp=timestamp,
-                reason=reason,
-                prev_hash=prev_hash,
-                entry_hash=entry_hash,
-            )
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with self._path.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry.to_dict(), sort_keys=True, separators=(",", ":")) + "\n")
-        return entry
+        return LedgerReader(self._ledger_dir).verify().errors
 
     # ------------------------------------------------------------------
     # Public write API
     # ------------------------------------------------------------------
 
-    def record_quarantined(self, task_title: str, *, reason: str, timestamp: str = "") -> JournalEntry:
+    def _record(
+        self, event_type: QuarantineEventType, task_title: str, timestamp: str, reason: str
+    ) -> QuarantineJournalEntry:
+        if not timestamp:
+            from datetime import UTC, datetime
+
+            timestamp = datetime.now(tz=UTC).isoformat()
+        entry = self._writer().append(
+            kind=_kind_for(event_type),
+            payload={"task_title": task_title, "timestamp": timestamp, "reason": reason},
+        )
+        return QuarantineJournalEntry._from_ledger_entry(entry)
+
+    def record_quarantined(self, task_title: str, *, reason: str, timestamp: str = "") -> QuarantineJournalEntry:
         """Append a ``quarantined`` event for *task_title*.
 
         Args:
@@ -206,15 +205,11 @@ class QuarantineJournal:
             timestamp: ISO 8601 timestamp; auto-generated if empty.
 
         Returns:
-            The appended :class:`JournalEntry`.
+            The appended :class:`QuarantineJournalEntry`.
         """
-        if not timestamp:
-            from datetime import UTC, datetime
+        return self._record("quarantined", task_title, timestamp, reason)
 
-            timestamp = datetime.now(tz=UTC).isoformat()
-        return self._append("quarantined", task_title, timestamp, reason)
-
-    def record_released(self, task_title: str, *, reason: str, timestamp: str = "") -> JournalEntry:
+    def record_released(self, task_title: str, *, reason: str, timestamp: str = "") -> QuarantineJournalEntry:
         """Append a ``released`` event for *task_title*.
 
         Args:
@@ -223,15 +218,11 @@ class QuarantineJournal:
             timestamp: ISO 8601 timestamp; auto-generated if empty.
 
         Returns:
-            The appended :class:`JournalEntry`.
+            The appended :class:`QuarantineJournalEntry`.
         """
-        if not timestamp:
-            from datetime import UTC, datetime
+        return self._record("released", task_title, timestamp, reason)
 
-            timestamp = datetime.now(tz=UTC).isoformat()
-        return self._append("released", task_title, timestamp, reason)
-
-    def record_expired(self, task_title: str, *, reason: str, timestamp: str = "") -> JournalEntry:
+    def record_expired(self, task_title: str, *, reason: str, timestamp: str = "") -> QuarantineJournalEntry:
         """Append an ``expired`` event for *task_title*.
 
         Args:
@@ -240,10 +231,6 @@ class QuarantineJournal:
             timestamp: ISO 8601 timestamp; auto-generated if empty.
 
         Returns:
-            The appended :class:`JournalEntry`.
+            The appended :class:`QuarantineJournalEntry`.
         """
-        if not timestamp:
-            from datetime import UTC, datetime
-
-            timestamp = datetime.now(tz=UTC).isoformat()
-        return self._append("expired", task_title, timestamp, reason)
+        return self._record("expired", task_title, timestamp, reason)
