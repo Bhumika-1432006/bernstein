@@ -197,7 +197,7 @@ def build_dispatch_candidates(
     Args:
         batches: Role-grouped batches of Task-like objects (each item is
             iterable and indexable, exposing ``id`` and optional ``model`` /
-            ``adapter`` / ``effort`` / ``is_batch`` / ``cache_strategy``).
+            ``cli`` / ``effort`` / ``is_batch`` / ``cache_strategy``).
         cost_estimates: ``task_id -> estimated_cost_usd`` from the tick.
         run_id: The active run id (attributed to every candidate).
         day_key: UTC ``YYYY-MM-DD`` bucket for the day dimension.
@@ -222,7 +222,7 @@ def build_dispatch_candidates(
             projected_cost_usd=projected,
             day_key=day_key,
             pool=pool,
-            adapter=str(getattr(lead, "adapter", "") or ""),
+            adapter=str(getattr(lead, "cli", "") or ""),
             requested_effort=str(getattr(lead, "effort", "") or ""),
             batch_eligible=bool(getattr(lead, "is_batch", False)),
             requested_cache=str(getattr(lead, "cache_strategy", "") or ""),
