@@ -498,7 +498,14 @@ class QueryReceiptStore:
     def _load_card(self, agent_id: str, kid: str) -> AgentCard | None:
         card_path = self.root / "identity" / _safe_identity_dirname(agent_id) / "card.json"
         if not card_path.exists():
-            return None
+            # Compatibility: POSIX stores created before #5859 wrote the raw
+            # agent_id as the directory name (e.g. ``identity/agent:foo/``).
+            # Fall back to that path read-only — never write or migrate it.
+            legacy_path = self.root / "identity" / agent_id / "card.json"
+            if legacy_path.exists():
+                card_path = legacy_path
+            else:
+                return None
         try:
             data = json.loads(card_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):

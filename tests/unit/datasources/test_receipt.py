@@ -158,6 +158,34 @@ def test_card_is_persisted_before_the_lineage_entry_is_sealed(
     assert seen_card_before_seal["value"] is True
 
 
+def test_verify_succeeds_for_card_written_at_legacy_posix_path(tmp_path: Path, keypair, operator_key) -> None:
+    """POSIX stores created before #5859 wrote the raw agent_id as the directory
+    name (e.g. ``identity/agent:foo/``).  A verify-only auditor holding such a
+    store must still pass, because _load_card falls back to the legacy path
+    read-only when the encoded path is absent.
+    """
+    from bernstein.core.datasources import receipt as receipt_module
+
+    db = _make_db(tmp_path / "a.db", [(1, "a")])
+    store = _store(tmp_path, keypair, operator_key)
+    _, receipt = _record(tmp_path, store, db)
+
+    # Simulate a pre-#5859 POSIX store: move the card from the encoded
+    # directory to the legacy raw-id directory and remove the encoded one.
+    card, _priv = keypair
+    encoded_dir = tmp_path / "datasources" / "identity" / receipt_module._safe_identity_dirname(card.agent_id)
+    legacy_dir = tmp_path / "datasources" / "identity" / card.agent_id
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "card.json").write_bytes((encoded_dir / "card.json").read_bytes())
+    import shutil
+
+    shutil.rmtree(encoded_dir)
+
+    outcome = store.verify(receipt.receipt_id)
+    assert outcome.ok, outcome.failures
+    assert outcome.checks["signature"] is True
+
+
 # --- AC2 tamper: stored result copy ----------------------------------------
 
 
