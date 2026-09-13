@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from bernstein.core.persistence.masked_failure_report import (
+    _NON_TERMINAL_KINDS,
+    _TERMINAL_KINDS,
     AttemptRecord,
     count_masked_failures,
     scan_for_masked_failures,
@@ -11,7 +13,19 @@ from bernstein.core.persistence.work_ledger import (
     KIND_TASK_ABANDONED,
     KIND_TASK_COMPLETED,
     KIND_TASK_FAILED,
+    TASK_KINDS,
 )
+
+# ---------------------------------------------------------------------------
+# Kind-set partition assertion
+# ---------------------------------------------------------------------------
+
+
+def test_terminal_and_non_terminal_partition_task_kinds() -> None:
+    """_TERMINAL_KINDS and _NON_TERMINAL_KINDS together equal TASK_KINDS exactly."""
+    assert _TERMINAL_KINDS | _NON_TERMINAL_KINDS == TASK_KINDS
+    assert frozenset() == _TERMINAL_KINDS & _NON_TERMINAL_KINDS
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -33,7 +47,7 @@ class TestCountMaskedFailures:
     def test_no_attempts_returns_zero_report(self) -> None:
         report = count_masked_failures("t1", [])
         assert report.task_id == "t1"
-        assert report.attempt_count == 0
+        assert report.terminal_transition_count == 0
         assert report.failure_count_before_success == 0
         assert report.final_outcome == ""
         assert not report.is_masked
@@ -41,7 +55,7 @@ class TestCountMaskedFailures:
     def test_single_success_is_not_masked(self) -> None:
         attempts = [_attempt("t1", KIND_TASK_COMPLETED)]
         report = count_masked_failures("t1", attempts)
-        assert report.attempt_count == 1
+        assert report.terminal_transition_count == 1
         assert report.failure_count_before_success == 0
         assert report.final_outcome == KIND_TASK_COMPLETED
         assert not report.is_masked
@@ -49,7 +63,7 @@ class TestCountMaskedFailures:
     def test_single_failure_is_not_masked(self) -> None:
         attempts = [_attempt("t1", KIND_TASK_FAILED)]
         report = count_masked_failures("t1", attempts)
-        assert report.attempt_count == 1
+        assert report.terminal_transition_count == 1
         assert report.failure_count_before_success == 0
         assert report.final_outcome == KIND_TASK_FAILED
         assert not report.is_masked
@@ -72,7 +86,7 @@ class TestCountMaskedFailures:
         ]
         report = count_masked_failures("t1", attempts)
         assert report.failure_count_before_success == 2
-        assert report.attempt_count == 3
+        assert report.terminal_transition_count == 3
         assert report.is_masked
 
     def test_abandoned_terminal_is_not_masked(self) -> None:
@@ -92,7 +106,7 @@ class TestCountMaskedFailures:
             _attempt("t1", KIND_TASK_COMPLETED),
         ]
         report = count_masked_failures("t1", attempts)
-        assert report.attempt_count == 1
+        assert report.terminal_transition_count == 1
         assert report.failure_count_before_success == 0
         assert not report.is_masked
 

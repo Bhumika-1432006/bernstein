@@ -10,6 +10,9 @@ records (each carrying a ``task_id`` and a transition ``kind`` from the work
 ledger vocabulary).  It never reads disk directly; callers supply the records
 from wherever they retrieved them so the logic is independently testable.
 
+Note: tasks that are in-flight (no terminal-kind transition yet) are excluded
+from the report entirely -- they appear in the ledger but not in the output.
+
 Typical use::
 
     from bernstein.core.persistence.work_ledger import (
@@ -38,6 +41,7 @@ from bernstein.core.persistence.work_ledger import (
     KIND_TASK_ABANDONED,
     KIND_TASK_COMPLETED,
     KIND_TASK_FAILED,
+    TASK_KINDS,
 )
 
 if TYPE_CHECKING:
@@ -51,6 +55,9 @@ _TERMINAL_KINDS: frozenset[str] = frozenset(
         KIND_TASK_ABANDONED,
     }
 )
+
+#: Non-terminal kinds that do not end an attempt sequence.
+_NON_TERMINAL_KINDS: frozenset[str] = TASK_KINDS - _TERMINAL_KINDS
 
 #: The kind that counts as a successful terminal outcome.
 _SUCCESS_KIND: str = KIND_TASK_COMPLETED
@@ -78,19 +85,20 @@ class MaskedFailureReport:
 
     Attributes:
         task_id: The task these attempts belong to.
-        attempt_count: Total number of terminal-kind transitions seen.
+        terminal_transition_count: Total number of terminal-kind transitions seen.
         failure_count_before_success: Consecutive ``task.failed`` transitions
             immediately before the final ``task.completed``.  Zero if the task
             succeeded on the first try or never succeeded.
         final_outcome: The terminal kind of the last attempt: ``task.completed``,
-            ``task.failed``, or ``task.abandoned``.
+            ``task.failed``, ``task.abandoned``, or ``""`` when the task has no
+            terminal transitions.
         is_masked: ``True`` when the task eventually completed but had at least
             one failure attempt before it -- the outcome is a success that hid
             prior failures.
     """
 
     task_id: str
-    attempt_count: int
+    terminal_transition_count: int
     failure_count_before_success: int
     final_outcome: str
     is_masked: bool
@@ -105,7 +113,9 @@ def count_masked_failures(task_id: str, attempts: Sequence[AttemptRecord]) -> Ma
     The failure count is the number of consecutive ``task.failed`` transitions
     immediately before the last ``task.completed`` in the filtered sequence.
     Failures that appear *after* an earlier success (e.g. a task that was
-    re-run) are not included in ``failure_count_before_success``.
+    re-run) are not included in ``failure_count_before_success``.  A task
+    that ends with ``task.abandoned`` is never considered masked: the abandon
+    is itself a visible non-success outcome, not a hidden one.
 
     Args:
         task_id: Which task to report on.
@@ -119,19 +129,19 @@ def count_masked_failures(task_id: str, attempts: Sequence[AttemptRecord]) -> Ma
     if not task_attempts:
         return MaskedFailureReport(
             task_id=task_id,
-            attempt_count=0,
+            terminal_transition_count=0,
             failure_count_before_success=0,
             final_outcome="",
             is_masked=False,
         )
 
     final = task_attempts[-1]
-    attempt_count = len(task_attempts)
+    terminal_transition_count = len(task_attempts)
 
     if final.kind != _SUCCESS_KIND:
         return MaskedFailureReport(
             task_id=task_id,
-            attempt_count=attempt_count,
+            terminal_transition_count=terminal_transition_count,
             failure_count_before_success=0,
             final_outcome=final.kind,
             is_masked=False,
@@ -146,7 +156,7 @@ def count_masked_failures(task_id: str, attempts: Sequence[AttemptRecord]) -> Ma
 
     return MaskedFailureReport(
         task_id=task_id,
-        attempt_count=attempt_count,
+        terminal_transition_count=terminal_transition_count,
         failure_count_before_success=failure_count,
         final_outcome=final.kind,
         is_masked=failure_count > 0,
@@ -157,7 +167,8 @@ def scan_for_masked_failures(attempts: Sequence[AttemptRecord]) -> list[MaskedFa
     """Return one :class:`MaskedFailureReport` per distinct task id in *attempts*.
 
     Tasks are returned in the order their first attempt record appears.  Only
-    tasks that have at least one terminal-kind transition are included.
+    tasks that have at least one terminal-kind transition are included; in-flight
+    tasks whose only records are non-terminal (e.g. ``task.started``) are omitted.
 
     Args:
         attempts: Ordered sequence of attempt records (oldest first).
@@ -165,11 +176,14 @@ def scan_for_masked_failures(attempts: Sequence[AttemptRecord]) -> list[MaskedFa
     Returns:
         List of reports, one per task id that has any terminal transition.
     """
+    bucketed: dict[str, list[AttemptRecord]] = {}
     seen_order: list[str] = []
-    task_ids: set[str] = set()
     for attempt in attempts:
-        if attempt.kind in _TERMINAL_KINDS and attempt.task_id not in task_ids:
+        if attempt.kind not in _TERMINAL_KINDS:
+            continue
+        if attempt.task_id not in bucketed:
+            bucketed[attempt.task_id] = []
             seen_order.append(attempt.task_id)
-            task_ids.add(attempt.task_id)
+        bucketed[attempt.task_id].append(attempt)
 
-    return [count_masked_failures(tid, attempts) for tid in seen_order]
+    return [count_masked_failures(tid, bucketed[tid]) for tid in seen_order]
