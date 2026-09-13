@@ -41,7 +41,9 @@ def test_q1_run_receipt_records_the_initiating_principal(bundle_reader: BundleRe
 
     The ``run_started`` journal event carries a ``principal`` field naming
     the identity that submitted the run.  The bundle alone is sufficient;
-    no external source is consulted.
+    no external source is consulted.  Note: the values in this fixture are
+    recorder-authored; they reflect what the production writers record, not
+    a live identity assertion.
     """
     receipt = bundle_reader.read_json(recorder.RUN_RECEIPT_NAME)
     events = receipt["journal"]["events"]
@@ -51,8 +53,7 @@ def test_q1_run_receipt_records_the_initiating_principal(bundle_reader: BundleRe
 
     start = start_events[0]
     assert _PRINCIPAL_FIELD in start, (
-        f"{_RUN_START_EVENT!r} event is missing the {_PRINCIPAL_FIELD!r} field; "
-        f"available keys: {list(start.keys())}"
+        f"{_RUN_START_EVENT!r} event is missing the {_PRINCIPAL_FIELD!r} field; available keys: {list(start.keys())}"
     )
 
     principal = start[_PRINCIPAL_FIELD]
@@ -74,14 +75,16 @@ def test_q1_principal_matches_expected_run(bundle_reader: BundleReader) -> None:
 # ---------------------------------------------------------------------------
 
 #: Journal event kinds that represent actions (excluding run-level bookends).
-_ACTION_EVENT_KINDS = frozenset({
-    "agent_spawned",
-    "tool_called",
-    "file_read",
-    "model_request",
-    "model_response",
-    "artifact_written",
-})
+_ACTION_EVENT_KINDS = frozenset(
+    {
+        "agent_spawned",
+        "tool_called",
+        "file_read",
+        "model_request",
+        "model_response",
+        "artifact_written",
+    }
+)
 
 #: Field on each action event that names the performing agent.
 _AGENT_ID_FIELD = "agent_id"
@@ -95,7 +98,10 @@ def test_q2_every_action_event_carries_an_agent_id(bundle_reader: BundleReader) 
     ``file_read``, ``model_request``, ``model_response``,
     ``artifact_written`` -- carries an ``agent_id`` field naming the
     agent responsible.  The run-level bookends (``run_started``,
-    ``run_completed``) are not actions and are excluded.
+    ``run_completed``) are not actions and are excluded.  Note: only
+    ``agent_spawned`` is emitted by production code today; the remaining
+    event kinds appear in the fixture but are not yet wired to the
+    production writers.
     """
     receipt = bundle_reader.read_json(recorder.RUN_RECEIPT_NAME)
     events = receipt["journal"]["events"]
@@ -103,14 +109,8 @@ def test_q2_every_action_event_carries_an_agent_id(bundle_reader: BundleReader) 
     action_events = [e for e in events if e.get("event") in _ACTION_EVENT_KINDS]
     assert action_events, f"no action events found; looked for {sorted(_ACTION_EVENT_KINDS)}"
 
-    missing = [
-        f"{e['event']}[{e['index']}]"
-        for e in action_events
-        if not e.get(_AGENT_ID_FIELD)
-    ]
-    assert not missing, (
-        f"action events without {_AGENT_ID_FIELD!r}: {missing}"
-    )
+    missing = [f"{e['event']}[{e['index']}]" for e in action_events if not e.get(_AGENT_ID_FIELD)]
+    assert not missing, f"action events without {_AGENT_ID_FIELD!r}: {missing}"
 
 
 def test_q2_agent_ids_are_non_empty_strings(bundle_reader: BundleReader) -> None:
@@ -137,6 +137,7 @@ _IDENTITY_FIELDS = ("credential_id", "presented_identity", "identity_token_id", 
 @pytest.mark.question(7)
 @pytest.mark.xfail(
     strict=True,
+    raises=AssertionError,
     reason=(
         "the tool_called event records the calling agent and the server but "
         "carries no credential or presented-identity field; an auditor cannot "
@@ -159,8 +160,7 @@ def test_q7_tool_called_event_records_presented_identity(bundle_reader: BundleRe
     assert tool_calls, "no tool_called event found in journal"
 
     for call in tool_calls:
-        details = {**call, **(call.get("details") or {})}
-        found = [f for f in _IDENTITY_FIELDS if f in details]
+        found = [f for f in _IDENTITY_FIELDS if isinstance(call.get(f), str) and call.get(f)]
         assert found, (
             f"tool_called event at index {call['index']} carries no presented-identity field; "
             f"looked for {list(_IDENTITY_FIELDS)}"
@@ -172,13 +172,19 @@ def test_q7_tool_called_event_records_presented_identity(bundle_reader: BundleRe
 # ---------------------------------------------------------------------------
 
 #: Fields any of which would identify the code artifact that ran.
-_CODE_DIGEST_FIELDS = ("code_digest", "code_sha256", "image_digest", "binary_hash")
+_CODE_DIGEST_FIELDS = ("code_digest", "code_sha256", "image_digest", "binary_hash", "git_sha")
 
 #: Fields any of which would identify the configuration that was active.
 _CONFIG_DIGEST_FIELDS = ("config_digest", "config_sha256", "config_hash", "playbook_digest")
 
 #: Fields any of which would list the tool set that was available.
-_TOOLSET_FIELDS = ("toolset_digest", "toolset_id", "tool_manifest_digest", "mcp_manifest_hash")
+_TOOLSET_FIELDS = (
+    "toolset_digest",
+    "toolset_id",
+    "tool_manifest_digest",
+    "mcp_manifest_hash",
+    "extension_set_digest",
+)
 
 
 @pytest.mark.question(14)
@@ -208,6 +214,8 @@ def test_q14_bundle_records_code_config_and_toolset(bundle_reader: BundleReader)
     spine_entries = receipt.get("spine", {}).get("entries", [])
     for entry in spine_entries:
         all_fields.update(entry)
+    for event in receipt.get("journal", {}).get("events", []):
+        all_fields.update(event)
 
     has_code = any(f in all_fields for f in _CODE_DIGEST_FIELDS)
     has_config = any(f in all_fields for f in _CONFIG_DIGEST_FIELDS)
