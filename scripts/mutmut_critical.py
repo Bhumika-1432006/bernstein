@@ -119,28 +119,24 @@ MODULES: tuple[Module, ...] = (
         source="src/bernstein/core/lineage/tips.py",
         tests=("tests/unit/lineage/",),
         threshold=0.75,
-        budget_seconds=900,
+        budget_seconds=600,
         max_candidates=60,
-        note=(
-            "Lineage v1 tip tracker. Suite shares tests/unit/lineage/ with "
-            "lineage_gate and lineage_merge; baseline budget raised from 600 "
-            "to 900 (baseline allowance 225 s) to match the measured suite "
-            "runtime, which exceeds the 180 s floor derived from 600 s "
-            "(issue #5595)."
-        ),
+        note="Lineage v1 tip tracker.",
     ),
     Module(
         key="lineage_merge",
         source="src/bernstein/core/lineage/merge.py",
-        tests=("tests/unit/lineage/",),
+        tests=(
+            "tests/unit/lineage/test_merge.py",
+            "tests/unit/lineage/test_merge_provenance.py",
+        ),
         threshold=0.75,
         budget_seconds=900,
         max_candidates=60,
         note=(
-            "Lineage v1 merge resolution. Suite shares tests/unit/lineage/ "
-            "with lineage_gate and lineage_tips; baseline budget raised from "
-            "600 to 900 (baseline allowance 225 s) to match the measured "
-            "suite runtime (issue #5595)."
+            "Lineage v1 merge resolution. Tests narrowed to merge-specific "
+            "files so the baseline does not run the full lineage suite "
+            "(issue #5595)."
         ),
     ),
     Module(
