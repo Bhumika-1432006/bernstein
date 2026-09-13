@@ -70,6 +70,58 @@ def _retry_escalation_context(orch: Any) -> dict[str, Any]:
     }
 
 
+def _checkpoint_before_retry_safe(orch: Any, session: Any, task_id: str) -> None:
+    """Record a resumable checkpoint for the failing session before it retries.
+
+    Issue #5844: the checkpointed-retries feature (#2359/#2403) decides
+    warm/fork/cold from the *latest recorded checkpoint*
+    (``_stamp_checkpoint_retry_metadata_safe``, called from
+    :func:`~bernstein.core.tasks.task_lifecycle.retry_or_fail_task`), but
+    nothing on the ordinary crash/gate-failure/timeout path ever recorded
+    one. The only production caller of
+    :func:`~bernstein.core.tasks.checkpoint_retry.record_task_checkpoint`
+    was ``SteeringController._pause``, which fires only on an
+    operator-issued pause -- never on an autonomous failure. Every
+    ordinary retry therefore fell back cold regardless of what the
+    adapter could actually resume, "works, but not as documented."
+
+    Called right before ``retry_or_fail_task`` at each failure call site
+    that still has the dying session in scope. ``session.endpoint_adapter_name``
+    is the adapter registry key that actually served the spawn (issue
+    #4908 stamped it there for exactly this kind of after-the-fact
+    lookup); ``orch._spawner.get_worktree_path`` is the same worktree
+    lookup every other post-mortem check in this module already uses.
+
+    Never raises and never blocks the retry: a checkpoint that cannot be
+    recorded (no worktree, no adapter, a journal error) just leaves the
+    retry cold, the historical behavior before this fix existed.
+    """
+    try:
+        from bernstein.core.tasks.checkpoint_retry import record_task_checkpoint, workspace_hash
+
+        spawner = getattr(orch, "_spawner", None)
+        worktree_path = spawner.get_worktree_path(session.id) if spawner is not None else None
+        ws_hash = ""
+        if worktree_path is not None:
+            with contextlib.suppress(OSError, ValueError):
+                ws_hash = workspace_hash(Path(worktree_path))
+        record_task_checkpoint(
+            sdd_dir=Path(orch._workdir) / ".sdd",
+            task_id=task_id,
+            adapter=getattr(session, "endpoint_adapter_name", "") or "",
+            session_id=session.id,
+            workspace_hash=ws_hash,
+            worktree_path=str(worktree_path) if worktree_path is not None else "",
+        )
+    except Exception as exc:
+        logger.debug(
+            "checkpoint-before-retry skipped for task %s session %s (%s); retry proceeds cold",
+            task_id,
+            getattr(session, "id", "unknown"),
+            type(exc).__name__,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Abort chain helpers - three-level hierarchy
 # ---------------------------------------------------------------------------
@@ -1355,6 +1407,7 @@ def _handle_failure_detection(
 
     if _failure_type in _FAST_FAIL_LOG_FAILURE_TYPES:
         reason = f"Agent {session.id} died; {_failure_type} detected in agent log (exit_code={session.exit_code!r})"
+        _checkpoint_before_retry_safe(orch, session, task_id)
         try:
             retry_or_fail_task(
                 task_id,
@@ -2021,6 +2074,7 @@ def _handle_orphan_no_signals(
                 len(_uncommitted),
                 _uncommitted[:5],
             )
+            _checkpoint_before_retry_safe(orch, session, task_id)
             try:
                 retry_or_fail_task(
                     task_id,
@@ -2114,6 +2168,7 @@ def _handle_orphan_no_signals(
                 f"Agent {session.id} exited cleanly but produced no verified deliverable "
                 f"(empty diff, no commits, no completion signals)"
             )
+        _checkpoint_before_retry_safe(orch, session, task_id)
         try:
             retry_or_fail_task(
                 task_id,
@@ -2170,6 +2225,7 @@ def _handle_orphan_no_signals(
 
     # Agent died without output
     runtime = int(time.time() - start_ts)
+    _checkpoint_before_retry_safe(orch, session, task_id)
     try:
         retry_or_fail_task(
             task_id,
@@ -2395,6 +2451,7 @@ def handle_orphaned_task(
                 logger.error(_ORPHAN_COMPLETE_ERROR, task_id, exc)
                 error_type = "complete_failed"
         else:
+            _checkpoint_before_retry_safe(orch, session, task_id)
             try:
                 retry_or_fail_task(
                     task_id,
@@ -2982,6 +3039,7 @@ def _reap_heartbeat_timeout(
                 )
             except OSError:
                 logger.debug("WAL write failed for heartbeat-reaped task %s", task_id)
+        _checkpoint_before_retry_safe(orch, session, task_id)
         try:
             retry_or_fail_task(
                 task_id,

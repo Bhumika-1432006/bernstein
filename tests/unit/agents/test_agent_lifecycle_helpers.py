@@ -28,6 +28,7 @@ from bernstein.core.models import AbortReason, AgentSession, ModelConfig
 
 from bernstein.core.agents.agent_lifecycle import (
     _abort_siblings,
+    _checkpoint_before_retry_safe,
     _has_git_commits_on_branch,
     _propagate_abort_to_children,
     _release_file_ownership,
@@ -38,6 +39,7 @@ from bernstein.core.agents.agent_lifecycle import (
     emit_orphan_metrics,
     purge_dead_agents,
 )
+from bernstein.core.tasks.checkpoint_retry import latest_checkpoint
 
 
 def _session(
@@ -561,3 +563,48 @@ def test_long_lived_clean_exit_auto_complete_does_not_warn(
         )
     assert success is True
     assert not any("SUSPICIOUS auto-complete" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# _checkpoint_before_retry_safe (issue #5844)
+# ---------------------------------------------------------------------------
+
+
+def test_checkpoint_before_retry_records_a_resumable_checkpoint(tmp_path: Path) -> None:
+    """A dying session with a live worktree gets a checkpoint before it retries.
+
+    Before this fix, ``record_task_checkpoint`` was only ever called from
+    ``SteeringController._pause`` (an operator-issued pause), so an ordinary
+    crash/timeout retry always fell back cold even when the worktree it died
+    in was still on disk and resumable.
+    """
+    sdd_dir = tmp_path / ".sdd"
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "notes.txt").write_text("in progress", encoding="utf-8")
+    session = _session(sid="A-1")
+    session.endpoint_adapter_name = "claude_code"
+    orch = SimpleNamespace(
+        _workdir=str(tmp_path),
+        _spawner=SimpleNamespace(get_worktree_path=lambda sid: worktree),
+    )
+
+    _checkpoint_before_retry_safe(orch, session, "T-1")
+
+    ref = latest_checkpoint(sdd_dir, "T-1")
+    assert ref is not None
+    assert ref.adapter == "claude_code"
+    assert ref.session_id == "A-1"
+
+
+def test_checkpoint_before_retry_never_raises_when_workdir_missing() -> None:
+    """No ``.sdd`` directory / no spawner -> best-effort no-op, retry proceeds cold.
+
+    The retry path this guards must never be blocked by a checkpoint
+    failure, so any exception (missing workdir, journal error, no adapter)
+    is swallowed rather than propagated.
+    """
+    session = _session(sid="A-1")
+    orch = SimpleNamespace()  # no _workdir, no _spawner
+
+    _checkpoint_before_retry_safe(orch, session, "T-1")
