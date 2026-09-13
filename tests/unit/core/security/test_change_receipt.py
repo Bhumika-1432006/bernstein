@@ -371,11 +371,23 @@ class TestIdempotencyFunctions:
         assert len(k) == 64
         assert all(c in "0123456789abcdef" for c in k)
 
-    def test_idempotency_key_does_not_contain_desired_value(self) -> None:
-        """The desired value is not embedded in the key (it is hashed, not concatenated)."""
-        desired = "super-secret-value"
-        k = idempotency_key("res:1", desired)
-        assert desired not in k
+    def test_idempotency_key_reflects_sha256_of_sha256_structure(self) -> None:
+        """Key = sha256(entity_id + ':' + sha256(desired_value.encode('utf-8')))."""
+        import hashlib
+
+        entity_id = "iam.User:alice"
+        desired_value = "role:admin"
+        inner = hashlib.sha256(desired_value.encode("utf-8")).hexdigest()
+        expected = hashlib.sha256(f"{entity_id}:{inner}".encode()).hexdigest()
+        assert idempotency_key(entity_id, desired_value) == expected
+
+    def test_idempotency_key_accepts_structured_value(self) -> None:
+        """A dict desired_value is serialised via canonical JSON before hashing."""
+        k_dict = idempotency_key("res:1", {"role": "admin", "scope": "global"})
+        k_str = idempotency_key("res:1", '{"role":"admin","scope":"global"}')
+        assert k_dict != k_str, "dict and its JSON string are different pre-images"
+        assert len(k_dict) == 64
+        assert all(c in "0123456789abcdef" for c in k_dict)
 
     def test_is_already_satisfied_true_when_equal(self) -> None:
         """Returns True when observed equals desired — no write needed."""

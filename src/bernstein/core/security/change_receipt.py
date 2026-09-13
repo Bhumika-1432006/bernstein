@@ -76,12 +76,18 @@ def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def idempotency_key(entity_id: str, desired_value: str) -> str:
+def idempotency_key(entity_id: str, desired_value: Any) -> str:
     """Derive a stable idempotency key from an entity id and a desired value.
 
-    The key is ``sha256(entity_id + ":" + sha256(desired_value))`` so the
-    desired value is never stored in the key and the key is stable across
-    callers who hold the same entity_id and desired_value pair.
+    The key is ``sha256(entity_id + ":" + sha256(serialised(desired_value)))``
+    so the desired value is never stored in the key and the key is stable
+    across callers who hold the same entity_id and desired_value pair.
+
+    Serialisation rules:
+    - ``bytes``: used directly.
+    - ``str``: encoded as UTF-8.
+    - Anything else: serialised via canonical JSON (sorted keys, compact
+      separators) so dict and list values produce a stable byte sequence.
 
     Args:
         entity_id: The resource being changed (e.g. ``"iam.User:alice"``).
@@ -90,7 +96,18 @@ def idempotency_key(entity_id: str, desired_value: str) -> str:
     Returns:
         A hex-encoded SHA-256 digest string.
     """
-    value_digest = _sha256_hex(desired_value.encode())
+    if isinstance(desired_value, bytes):
+        raw_value = desired_value
+    elif isinstance(desired_value, str):
+        raw_value = desired_value.encode("utf-8")
+    else:
+        raw_value = json.dumps(
+            _sort_recursive(desired_value),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    value_digest = _sha256_hex(raw_value)
     raw = f"{entity_id}:{value_digest}".encode()
     return _sha256_hex(raw)
 
