@@ -7,7 +7,8 @@ Coverage:
 * record_success is idempotent on re-record (no error, still marked done).
 * done_count counts distinct entity ids.
 * verify returns no errors on a well-formed ledger and catches tampered lines.
-* The ledger is byte-identical across two reads of the same file.
+* verify detects non-monotonic seq (reordering / end-truncation).
+* path property returns the ledger path.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import pytest
 from bernstein.core.persistence.batch_checkpoint import (
     GENESIS_HASH,
     BatchCheckpointLedger,
+    CheckpointEntry,
 )
 
 INSTANT_A = "2025-06-01T10:00:00Z"
@@ -57,6 +59,13 @@ class TestRecordAndIsDone:
             ledger.record_success(f"res:{i}", INSTANT_A)
         for i in range(5):
             assert ledger.is_done(f"res:{i}")
+
+    def test_record_success_is_idempotent_on_re_record(self, ledger_path: Path) -> None:
+        """Writing the same entity twice does not raise; it stays marked done."""
+        ledger = BatchCheckpointLedger(ledger_path)
+        ledger.record_success("res:1", INSTANT_A)
+        ledger.record_success("res:1", INSTANT_B)
+        assert ledger.is_done("res:1")
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +143,23 @@ class TestVerify:
         errors = BatchCheckpointLedger(ledger_path).verify()
         assert any("entry_hash mismatch" in e for e in errors)
 
+    def test_non_monotonic_seq_is_detected(self, ledger_path: Path) -> None:
+        """Verify catches a line whose seq is not the next expected value."""
+        import json
+
+        ledger = BatchCheckpointLedger(ledger_path)
+        ledger.record_success("r1", INSTANT_A)
+        ledger.record_success("r2", INSTANT_B)
+
+        lines = ledger_path.read_text(encoding="utf-8").splitlines()
+        second = json.loads(lines[1])
+        second["seq"] = 99
+        lines[1] = json.dumps(second, separators=(",", ":"))
+        ledger_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        errors = BatchCheckpointLedger(ledger_path).verify()
+        assert any("seq mismatch" in e for e in errors)
+
 
 # ---------------------------------------------------------------------------
 # File creation and non-existent path
@@ -158,6 +184,10 @@ class TestFileHandling:
         ledger = BatchCheckpointLedger(path)
         assert ledger.verify() == []
 
+    def test_path_property_returns_ledger_path(self, ledger_path: Path) -> None:
+        ledger = BatchCheckpointLedger(ledger_path)
+        assert ledger.path == ledger_path
+
 
 # ---------------------------------------------------------------------------
 # GENESIS_HASH sentinel
@@ -167,3 +197,14 @@ class TestFileHandling:
 def test_genesis_hash_is_64_hex_zeros() -> None:
     assert GENESIS_HASH == "0" * 64
     assert len(GENESIS_HASH) == 64
+
+
+# ---------------------------------------------------------------------------
+# CheckpointEntry is immutable
+# ---------------------------------------------------------------------------
+
+
+def test_checkpoint_entry_is_frozen() -> None:
+    entry = CheckpointEntry(seq=0, entity_id="x", succeeded_at=INSTANT_A, prev_hash=GENESIS_HASH, entry_hash="a" * 64)
+    with pytest.raises((AttributeError, TypeError)):
+        entry.entity_id = "y"  # type: ignore[misc]
