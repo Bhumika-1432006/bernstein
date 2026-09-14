@@ -171,6 +171,7 @@ def test_retention_still_caps_total_when_active_run_sorts_first(tmp_path: Path) 
         surviving = sorted(p.name for p in (runs_root / "runs").iterdir() if p.is_dir())
     assert len(surviving) == 2
     assert "run-a" in surviving
+    assert "run-c" in surviving
 
 
 def test_run_id_traversal_is_refused(tmp_path: Path) -> None:
