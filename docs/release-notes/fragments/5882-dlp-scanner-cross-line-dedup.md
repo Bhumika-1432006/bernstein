@@ -7,3 +7,9 @@ leaking two different SSNs, or introducing the same license violation in two
 files, was reported once instead of twice, undercounting real violations in the
 compliance record. The scan-wide dedup set is removed; each rule can now match
 independently on every line, matching the behaviour of `dlp_scanner_v2.py` (#5882).
+
+Note: this reports every *line* a rule matches on, not every occurrence within a
+line — two regulated values on the same line (e.g. two SSNs on one line) still
+count as one finding, since each rule uses `pattern.search()` (first match per
+line), not `finditer()`. Reporting every occurrence within a line is a separate,
+deliberate change left for a follow-up.
