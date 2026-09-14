@@ -218,6 +218,9 @@ class TaskServiceImpl:
     def _fill_task_proto(self, proto: Any, task: Any) -> None:
         if task is None:
             return
+        # ``vars(task)`` assumes a non-dict ``task`` carries ``__dict__``
+        # (true for the current ``Task`` dataclass); a future ``slots=True``
+        # on ``Task`` would turn this into a ``TypeError``.
         t = task if isinstance(task, dict) else vars(task)
         proto.id = t.get("id", "")
         # ``goal`` prefers an explicit "goal" key and falls back to "title" --
