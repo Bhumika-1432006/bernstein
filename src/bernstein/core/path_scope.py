@@ -33,7 +33,7 @@ the other way, so it is stated here and pinned by a test.
 from __future__ import annotations
 
 import re
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -120,20 +120,6 @@ def normalise_repo_path(path: str) -> str:
     return normalised
 
 
-def _segments(pattern: str) -> list[str] | None:
-    """Split *pattern* into its path segments, or ``None`` when it admits nothing.
-
-    Shared by :func:`_compiled` and :func:`pattern_subsumes` so the two
-    reason about identical segment boundaries -- a subsumption check that
-    silently disagreed with the matcher it is supposed to describe would be
-    exactly the kind of two-implementations bug this module exists to avoid.
-    """
-    normalised = normalise_repo_path(pattern)
-    if not normalised:
-        return None
-    return _collapse_repeated_stars(normalised.split("/"))
-
-
 @lru_cache(maxsize=512)
 def _compiled(pattern: str) -> re.Pattern[str] | None:
     """Return the matcher for ``pattern``, or None when it admits nothing.
@@ -142,9 +128,11 @@ def _compiled(pattern: str) -> re.Pattern[str] | None:
     than everything: a scope that cannot be read must not widen to "no scope",
     which is the direction that turns a stored typo into an open door.
     """
-    segments = _segments(pattern)
-    if segments is None:
+    normalised = normalise_repo_path(pattern)
+    if not normalised:
         return None
+
+    segments = _collapse_repeated_stars(normalised.split("/"))
     last = len(segments) - 1
     parts: list[str] = []
     for index, segment in enumerate(segments):
@@ -233,103 +221,84 @@ def paths_outside_scope(paths: Iterable[str], patterns: Sequence[str]) -> tuple[
     return tuple(outside)
 
 
-# ---------------------------------------------------------------------------
-# Glob subsumption (issue #5418): is one pattern's language a subset of
-# another's, decided over the pattern language itself rather than by trying
-# sample paths.
-# ---------------------------------------------------------------------------
+def pattern_subsumes(outer: str, inner: str) -> bool:
+    """True when every path ``inner`` admits is also admitted by ``outer``.
 
+    Containment between two patterns, decided against the language above
+    rather than by matching sample paths: ``src/**`` subsumes ``src/core/**``
+    because no path exists that the second admits and the first does not.
 
-def pattern_subsumes(parent: str, child: str) -> bool:
-    """True iff every path *child* admits is also admitted by *parent*.
+    The relation is not ancestry. ``src`` does not subsume ``src/core`` for the
+    same reason ``src`` does not admit the path ``src/core`` - a pattern is not
+    a prefix. Nor is it string containment: ``src/*`` does not subsume
+    ``src/a/b``, because ``*`` stops at a separator.
 
-    Reasons over the segment/``*``/``?``/``**`` grammar directly -- the same
-    one :func:`_compiled` translates to regex -- rather than by matching a
-    finite sample of paths, so the answer holds for every path either pattern
-    could ever match. The prefix caveat in the module docstring applies here
-    too: ``src`` does not subsume ``src/core`` even though ``src/core``
-    starts with ``src`` as a string, because a pattern is not a prefix.
+    Undecided cases answer ``False``. A pattern that is admitted only by two
+    parent patterns *together* (``a/b`` under ``{a/*, b/*}`` is decided, but
+    ``a/?`` under ``{a/x, a/y}`` is not) is reported as not subsumed, which is
+    the direction that cannot report a narrowing that did not happen. Callers
+    comparing whole sets should read :func:`globs_narrow` in
+    :mod:`bernstein.core.security.capability_tokens`, which is where the
+    narrowing primitives live.
 
     Args:
-        parent: The candidate wider pattern.
-        child: The candidate narrower pattern.
+        outer: The wider pattern, in any spelling ``normalise_repo_path``
+            accepts.
+        inner: The pattern that must be contained in it.
 
     Returns:
-        ``True`` when *child*'s language is a subset of *parent*'s.
-        ``False`` when either pattern is empty/unreadable -- an unreadable
-        pattern already admits nothing (see :func:`_compiled`), and "narrows"
-        is not a claim this function will make about a comparison it cannot
-        read, the same fail-closed direction as the rest of this module.
+        True when ``outer`` admits every path ``inner`` admits.
     """
-    parent_segments = _segments(parent)
-    child_segments = _segments(child)
-    if parent_segments is None or child_segments is None:
-        return False
-    return _segments_subsume(tuple(parent_segments), tuple(child_segments))
+    outer_segments = _collapse_repeated_stars(normalise_repo_path(outer).split("/"))
+    inner_segments = _collapse_repeated_stars(normalise_repo_path(inner).split("/"))
+    return _segments_subsume(tuple(outer_segments), tuple(inner_segments))
 
 
-def _segments_subsume(parent: tuple[str, ...], child: tuple[str, ...]) -> bool:
-    """Segment-list containment: does *parent* cover every string *child* can produce.
+@lru_cache(maxsize=1024)
+def _segments_subsume(outer: tuple[str, ...], inner: tuple[str, ...]) -> bool:
+    """Whole-path subsumption, matching ``**`` against runs of inner segments."""
 
-    ``**`` matches zero or more whole segments of anything, so a parent
-    segment of ``**`` absorbs any amount of the child's remaining production
-    unconditionally; a *child* segment of ``**`` that the parent cannot mirror
-    with its own ``**`` can always produce more than the parent could ever
-    match, so that direction fails outright. Ordinary segments defer to
-    :func:`_segment_chars_subsume`.
-    """
-    cache: dict[tuple[int, int], bool] = {}
+    @cache
+    def walk(o: int, i: int) -> bool:
+        if o == len(outer):
+            # Nothing left to admit with. A remaining inner segment - even a
+            # `**`, which can also stand for one or more - names paths this
+            # side cannot produce.
+            return i == len(inner)
+        if outer[o] == "**":
+            # Zero segments, or one more of the inner's.
+            return walk(o + 1, i) or (i < len(inner) and walk(o, i + 1))
+        if i == len(inner):
+            return False
+        if inner[i] == "**":
+            # A single outer segment stands for exactly one segment; `**` may
+            # stand for none or for several, so it is not contained by one.
+            return False
+        return _segment_subsumes(outer[o], inner[i]) and walk(o + 1, i + 1)
 
-    def go(pi: int, ci: int) -> bool:
-        key = (pi, ci)
-        if key in cache:
-            return cache[key]
-        if ci == len(child):
-            result = all(seg == "**" for seg in parent[pi:])
-        elif pi == len(parent):
-            result = False
-        elif parent[pi] == "**":
-            result = go(pi + 1, ci) or go(pi, ci + 1)
-        elif child[ci] == "**":
-            result = False
-        else:
-            result = _segment_chars_subsume(parent[pi], child[ci]) and go(pi + 1, ci + 1)
-        cache[key] = result
-        return result
-
-    return go(0, 0)
+    return walk(0, 0)
 
 
-def _segment_chars_subsume(parent: str, child: str) -> bool:
-    """Within one segment, does *parent*'s language contain *child*'s.
+@lru_cache(maxsize=2048)
+def _segment_subsumes(outer: str, inner: str) -> bool:
+    """Subsumption within one segment, where ``*`` and ``?`` do not cross ``/``."""
 
-    Both are single segments (no ``/``) over the alphabet :func:`_segment_regex`
-    compiles: literal characters, ``*`` (any run within the segment, including
-    none), and ``?`` (exactly one character). ``*`` absorbs anything -- a
-    literal, a ``?``, or one more unit of the child's own wildcard production,
-    since it places no constraint on content. A ``?`` or a literal in *parent*
-    can only match a single guaranteed character, so a *child* ``*`` -- which
-    can produce zero or many characters -- always escapes it.
-    """
-    cache: dict[tuple[int, int], bool] = {}
+    @cache
+    def walk(o: int, i: int) -> bool:
+        if o == len(outer):
+            # A remaining `*` on the inner side can stand for a character this
+            # side has nothing left to admit with, so only an exhausted inner
+            # is contained.
+            return i == len(inner)
+        if outer[o] == "*":
+            # Any run within the segment, including none.
+            return walk(o + 1, i) or (i < len(inner) and walk(o, i + 1))
+        if i == len(inner):
+            return False
+        if outer[o] == "?":
+            # Exactly one character, so an inner `*` - which may stand for none
+            # or for several - is not contained by it.
+            return inner[i] != "*" and walk(o + 1, i + 1)
+        return outer[o] == inner[i] and walk(o + 1, i + 1)
 
-    def go(pi: int, ci: int) -> bool:
-        key = (pi, ci)
-        if key in cache:
-            return cache[key]
-        if ci == len(child):
-            result = all(ch == "*" for ch in parent[pi:])
-        elif pi == len(parent):
-            result = False
-        elif parent[pi] == "*":
-            result = go(pi + 1, ci) or go(pi, ci + 1)
-        elif child[ci] == "*":
-            result = False
-        elif parent[pi] == "?":
-            result = go(pi + 1, ci + 1)
-        else:
-            result = parent[pi] == child[ci] and go(pi + 1, ci + 1)
-        cache[key] = result
-        return result
-
-    return go(0, 0)
+    return walk(0, 0)
