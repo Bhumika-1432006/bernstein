@@ -266,6 +266,11 @@ def globs_narrow(child: frozenset[str] | None, parent: frozenset[str] | None) ->
         return True
     if child is None:
         return False
+    if not child:
+        # An empty set means "no restriction" (widest), so it cannot narrow a
+        # non-empty parent scope. ``all(...)`` over an empty child is vacuously
+        # true, which would otherwise grade the widest value as a narrowing.
+        return False
     return all(any(pattern_subsumes(p, c) for p in parent) for c in child)
 
 
