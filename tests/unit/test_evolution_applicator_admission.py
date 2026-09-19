@@ -131,22 +131,20 @@ def test_default_construction_still_works(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_rollback_writes_rolled_back_entry_to_history(tmp_path) -> None:
-    """rollback_upgrade must append a 'rolled_back' record to history.jsonl."""
+def test_rollback_of_unapplied_proposal_persists_receipt(tmp_path) -> None:
+    """Nothing applied: rollback succeeds and leaves a hash-anchored receipt."""
     import json
 
     state_dir = tmp_path / "state"
     executor = FileUpgradeExecutor(state_dir)
     proposal = _proposal()
 
-    executor.rollback_upgrade(proposal)
+    assert executor.rollback_upgrade(proposal) is True
 
-    history_file = state_dir / "upgrades" / "history.jsonl"
-    assert history_file.is_file(), "history.jsonl was not created by rollback"
-    records = [json.loads(line) for line in history_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert len(records) == 1
-    assert records[0]["proposal_id"] == proposal.id
-    assert records[0]["status"] == "rolled_back"
+    receipt = json.loads((state_dir / "upgrades" / "rollbacks" / f"{proposal.id}.json").read_text(encoding="utf-8"))
+    assert receipt["proposal_id"] == proposal.id
+    assert receipt["restored_files"] == []
+    assert receipt["receipt_hash"]
 
 
 def test_rollback_does_not_use_ignored_proposal_argument() -> None:
@@ -164,21 +162,13 @@ def test_rollback_does_not_use_ignored_proposal_argument() -> None:
 def test_rollback_restores_backup_files(tmp_path) -> None:
     """After rollback the backed-up file contents are back in config/."""
     state_dir = tmp_path / "state"
-    executor = FileUpgradeExecutor(state_dir)
-
-    # Simulate a backup: plant a backup file and register it.
+    proposal = _proposal()
+    applying = FileUpgradeExecutor(state_dir)
     config_file = state_dir / "config" / "policies.yaml"
     config_file.write_text("original: true\n", encoding="utf-8")
-    backup_path = state_dir / "upgrades" / "backup_policies.yaml"
-    backup_path.write_text("original: true\n", encoding="utf-8")
-    executor._backup_files["policies.yaml"] = backup_path
-
-    # Overwrite the config to simulate a failed apply.
+    applying._backup_file("policies.yaml", proposal.id)
     config_file.write_text("broken: yes\n", encoding="utf-8")
+    applying._record_history(proposal, "applied")
 
-    result = executor.rollback_upgrade(_proposal())
-
-    assert result is True
+    assert FileUpgradeExecutor(state_dir).rollback_upgrade(proposal) is True
     assert config_file.read_text(encoding="utf-8") == "original: true\n"
-    assert not backup_path.exists(), "backup file should be removed after restore"
-    assert executor._backup_files == {}
