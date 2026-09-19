@@ -34,9 +34,7 @@ async def test_post_task_to_server_forwards_completion_signals() -> None:
     ]
     task = _make_task(completion_signals=signals)
 
-    route = respx.post(f"{server_url}/tasks").mock(
-        return_value=httpx.Response(201, json={"id": "server-t-1"})
-    )
+    route = respx.post(f"{server_url}/tasks").mock(return_value=httpx.Response(201, json={"id": "server-t-1"}))
 
     async with httpx.AsyncClient() as client:
         task_id = await _post_task_to_server(client, server_url, task)
@@ -55,9 +53,7 @@ async def test_post_task_to_server_omits_completion_signals_when_empty() -> None
     server_url = "http://localhost:9999"
     task = _make_task(completion_signals=[])
 
-    respx.post(f"{server_url}/tasks").mock(
-        return_value=httpx.Response(201, json={"id": "server-t-2"})
-    )
+    respx.post(f"{server_url}/tasks").mock(return_value=httpx.Response(201, json={"id": "server-t-2"}))
 
     async with httpx.AsyncClient() as client:
         task_id = await _post_task_to_server(client, server_url, task)
