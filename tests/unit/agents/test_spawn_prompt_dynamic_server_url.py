@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 from bernstein.core.agents.spawn_prompt import _legacy_completion_instructions
 from bernstein.core.tasks.models import Task
 
@@ -14,8 +12,6 @@ def _make_task(task_id: str = "t-1", title: str = "Test") -> Task:
 
 def test_spawn_prompt_renders_dynamic_server_port(monkeypatch: object) -> None:
     """curl examples use BERNSTEIN_SERVER_URL when set."""
-    import pytest
-
     monkeypatch.setenv("BERNSTEIN_SERVER_URL", "http://127.0.0.1:19876")
     tasks = [_make_task("t-42")]
     result = _legacy_completion_instructions(tasks)
