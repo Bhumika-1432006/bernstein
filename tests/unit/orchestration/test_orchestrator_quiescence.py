@@ -23,9 +23,7 @@ def test_quiescence_self_stop_recognizes_closed_tasks() -> None:
         "failed": [],
         "closed": [object()],
     }
-    had_terminal = bool(
-        refreshed["done"] or refreshed["failed"] or refreshed.get("closed")
-    )
+    had_terminal = bool(refreshed["done"] or refreshed["failed"] or refreshed.get("closed"))
     assert had_terminal, "closed tasks must count as terminal at quiescence"
 
 
@@ -37,7 +35,5 @@ def test_quiescence_no_terminal_when_all_empty() -> None:
         "failed": [],
         "closed": [],
     }
-    had_terminal = bool(
-        refreshed["done"] or refreshed["failed"] or refreshed.get("closed")
-    )
+    had_terminal = bool(refreshed["done"] or refreshed["failed"] or refreshed.get("closed"))
     assert not had_terminal
