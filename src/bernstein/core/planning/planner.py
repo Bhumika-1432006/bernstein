@@ -116,6 +116,11 @@ async def _post_task_to_server(
     if isinstance(context_files, list) and context_files:
         body["metadata"] = {"context_files": [str(p) for p in context_files]}
 
+    # Forward completion_signals so plan-driven tasks use declared verification
+    # heuristics instead of falling back to defaults (issue #5960).
+    if task.completion_signals:
+        body["completion_signals"] = [{"type": s.type, "value": s.value} for s in task.completion_signals]
+
     # Plan mode: tasks start as PLANNED instead of OPEN
     if plan_mode:
         body["status"] = "planned"
