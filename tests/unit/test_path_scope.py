@@ -212,7 +212,12 @@ def test_question_mark_does_not_subsume_a_star() -> None:
     assert not pattern_subsumes("src/?.py", "src/*.py")
 
 
-def test_an_empty_pattern_subsumes_nothing() -> None:
-    """An empty pattern admits nothing on either side of the comparison."""
+def test_an_empty_parent_subsumes_nothing() -> None:
+    """An unreadable parent admits nothing, and containment stays fail-closed."""
     assert not pattern_subsumes("", "src/**")
-    assert not pattern_subsumes("src/**", "")
+
+
+def test_an_empty_child_is_contained_by_everything() -> None:
+    """An unreadable child is the empty language, a subset of every pattern."""
+    assert pattern_subsumes("src/**", "")
+    assert pattern_subsumes("", "")
