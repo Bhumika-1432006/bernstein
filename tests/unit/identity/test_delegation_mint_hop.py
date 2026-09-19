@@ -196,9 +196,7 @@ def test_sealed_chain_detects_tail_truncation(store, audit_root):
         kept = [line for index, line in enumerate(original) if index != removed]
         path.write_text("\n".join(kept) + "\n", encoding="utf-8")
         result = delegation.verify_run_chain(root=audit_root, run_id=RUN, key=KEY)
-        assert not result.valid, (
-            f"removing receipt {removed} from a sealed chain must be detected"
-        )
+        assert not result.valid, f"removing receipt {removed} from a sealed chain must be detected"
         if removed == len(original) - 1:
             assert result.sealed is False, "tail truncation must set sealed=False"
             assert any("tail truncation" in e for e in result.errors), result.errors
@@ -410,6 +408,7 @@ def test_forged_sidecar_without_key_is_detected(store, audit_root):
     # An attacker rebuilds the sidecar with the fields readable from the file,
     # but cannot produce a valid seal without the key.
     import json
+
     kept_last = json.loads(lines[-2])
     forged = {"run_id": RUN, "hop_count": len(lines) - 1, "head_hmac": kept_last["hmac"], "seal": "0" * 64}
     sidecar = audit_root / "delegation" / f"{RUN}.head.json"
