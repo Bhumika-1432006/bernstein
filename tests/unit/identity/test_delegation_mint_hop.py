@@ -366,3 +366,72 @@ def test_without_a_manifest_the_positional_root_rule_is_unchanged(store, audit_r
     result = CliRunner().invoke(delegation_group, ["verify", RUN, "--root", str(audit_root)])
     assert result.exit_code == 3, result.output
     assert "root_claimed_mid_chain" in result.output
+
+
+def test_deleted_sidecar_reports_sealed_none_but_require_sealed_fails(store, audit_root):
+    """A deleted sidecar is indistinguishable from never-sealed; require_sealed makes it an error."""
+    from bernstein.core.identity.delegation import DelegationLedger
+
+    ledger = DelegationLedger(root=audit_root, key=KEY)
+    parent = _mint_orchestrator(store)
+    _mint_child(store, "child-1", parent, task_ids=["t1"], allowed_files=["src/**"])
+    ledger.record_chain_head(RUN)
+
+    sidecar = audit_root / "delegation" / f"{RUN}.head.json"
+    assert sidecar.is_file()
+    sidecar.unlink()
+
+    # Default: no completeness claim, so valid is unchanged and sealed is None.
+    result = delegation.verify_run_chain(root=audit_root, run_id=RUN, key=KEY)
+    assert result.sealed is None
+    assert result.valid
+
+    # Auditor requires a seal: missing sidecar is now an error.
+    strict = delegation.verify_run_chain(root=audit_root, run_id=RUN, key=KEY, require_sealed=True)
+    assert not strict.valid
+    assert any("missing" in e and "sealed" in e for e in strict.errors)
+
+
+def test_forged_sidecar_without_key_is_detected(store, audit_root):
+    """Re-minting the sidecar from the truncated file alone fails the seal check."""
+    from bernstein.core.identity.delegation import DelegationLedger
+
+    ledger = DelegationLedger(root=audit_root, key=KEY)
+    parent = _mint_orchestrator(store)
+    for index in range(3):
+        _mint_child(store, f"child-{index}", parent, task_ids=[f"t{index}"], allowed_files=["src/**"])
+    ledger.record_chain_head(RUN)
+
+    path = audit_root / "delegation" / f"{RUN}.jsonl"
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    # truncate the tail
+    path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+
+    # An attacker rebuilds the sidecar with the fields readable from the file,
+    # but cannot produce a valid seal without the key.
+    import json
+    kept_last = json.loads(lines[-2])
+    forged = {"run_id": RUN, "hop_count": len(lines) - 1, "head_hmac": kept_last["hmac"], "seal": "0" * 64}
+    sidecar = audit_root / "delegation" / f"{RUN}.head.json"
+    sidecar.write_text(json.dumps(forged, sort_keys=True), encoding="utf-8")
+
+    result = delegation.verify_run_chain(root=audit_root, run_id=RUN, key=KEY)
+    assert result.sealed is False
+    assert any("seal mismatch" in e for e in result.errors)
+
+
+def test_non_object_sidecar_does_not_raise(store, audit_root):
+    """A sidecar holding valid-but-non-object JSON is reported, not raised."""
+    from bernstein.core.identity.delegation import DelegationLedger
+
+    ledger = DelegationLedger(root=audit_root, key=KEY)
+    parent = _mint_orchestrator(store)
+    _mint_child(store, "child-1", parent, task_ids=["t1"], allowed_files=["src/**"])
+    ledger.record_chain_head(RUN)
+
+    sidecar = audit_root / "delegation" / f"{RUN}.head.json"
+    sidecar.write_text("null", encoding="utf-8")
+
+    result = delegation.verify_run_chain(root=audit_root, run_id=RUN, key=KEY)
+    assert result.sealed is False
+    assert any("not a JSON object" in e for e in result.errors)
