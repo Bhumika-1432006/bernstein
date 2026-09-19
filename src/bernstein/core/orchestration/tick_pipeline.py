@@ -198,7 +198,7 @@ def fetch_all_tasks(
         that need the dependency-filtered view should apply their own dep check.
     """
     if statuses is None:
-        statuses = ["open", "claimed", "done", "failed"]
+        statuses = ["open", "claimed", "done", "failed", "closed"]
     by_status: dict[str, list[Task]] = {s: [] for s in statuses}
 
     offset = 0

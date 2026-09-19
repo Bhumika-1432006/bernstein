@@ -2486,7 +2486,11 @@ class Orchestrator:
             # harness driving tick() directly against an empty transport).
             # Self-stopping in that case would end the orchestrator before
             # it ever does anything.
-            _had_any_terminal_task = bool(refreshed_tasks_by_status["done"] or refreshed_tasks_by_status["failed"])
+            _had_any_terminal_task = bool(
+                refreshed_tasks_by_status["done"]
+                or refreshed_tasks_by_status["failed"]
+                or refreshed_tasks_by_status.get("closed")
+            )
             if not _had_any_terminal_task:
                 logger.debug(
                     "8b quiescence (tick #%d) with zero terminal tasks - not eligible "
