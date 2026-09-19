@@ -768,6 +768,16 @@ def _get_lesson_context(role: str, tasks: list[Task], workdir: Path) -> str:
     return lesson_context
 
 
+def _resolve_server_url() -> str:
+    """Return the runtime server base URL.
+
+    Reads BERNSTEIN_SERVER_URL from the environment so dynamically allocated
+    ports are reflected in curl examples (issue #5964).  Falls back to the
+    historical default when the variable is absent.
+    """
+    return os.environ.get("BERNSTEIN_SERVER_URL", "http://127.0.0.1:8052")
+
+
 def _legacy_completion_instructions(tasks: list[Task]) -> str:
     """Fallback completion instructions when the contract include is absent.
 
@@ -775,9 +785,10 @@ def _legacy_completion_instructions(tasks: list[Task]) -> str:
     --retry-connrefused (not --retry-all-errors) so curl only retries
     transient connection failures, NOT 4xx errors like 409 Conflict.
     """
+    server_url = _resolve_server_url()
     completion_cmds = "\n".join(
         f"curl -s -w '\\n%{{http_code}}' --retry 3 --retry-delay 2 --retry-connrefused "
-        f"-X POST http://127.0.0.1:8052/tasks/{t.id}/complete "
+        f"-X POST {server_url}/tasks/{t.id}/complete "
         f'-H "Content-Type: application/json" '
         f'-d \'{{"result_summary": "Completed: {t.title}"}}\''
         for t in tasks
@@ -1092,6 +1103,7 @@ def _render_prompt(
     # Team coordination: instruct agents to post discoveries and query peers
     if session_id:
         agent_id = session_id
+        _srv = _resolve_server_url()
         named_sections.append(
             (
                 "team coordination",
@@ -1099,7 +1111,7 @@ def _render_prompt(
                     "\n## Team coordination\n"
                     "When you create a new file, define an API, or discover something other agents should know:\n"
                     "```bash\n"
-                    "curl -s -X POST http://127.0.0.1:8052/bulletin "
+                    f"curl -s -X POST {_srv}/bulletin "
                     '-H "Content-Type: application/json" \\\n'
                     '  -d \'{"agent_id": "' + agent_id + '", "type": "finding", '
                     '"content": "<describe what you created or discovered>"}\'\n'
@@ -1111,7 +1123,7 @@ def _render_prompt(
                     "\n### Direct channel (agent-to-agent queries)\n"
                     "To ask another agent a question (e.g. about a schema or interface they own):\n"
                     "```bash\n"
-                    "curl -s -X POST http://127.0.0.1:8052/channel/query "
+                    f"curl -s -X POST {_srv}/channel/query "
                     '-H "Content-Type: application/json" \\\n'
                     '  -d \'{"sender_agent": "' + agent_id + '", '
                     '"topic": "<short-topic>", '
@@ -1120,11 +1132,11 @@ def _render_prompt(
                     "```\n"
                     "Check for questions addressed to you:\n"
                     "```bash\n"
-                    "curl -s http://127.0.0.1:8052/channel/queries?agent_id=" + agent_id + "\n"
+                    f"curl -s {_srv}/channel/queries?agent_id=" + agent_id + "\n"
                     "```\n"
                     "Respond to a query:\n"
                     "```bash\n"
-                    "curl -s -X POST http://127.0.0.1:8052/channel/<query_id>/respond "
+                    f"curl -s -X POST {_srv}/channel/<query_id>/respond "
                     '-H "Content-Type: application/json" \\\n'
                     '  -d \'{"responder_agent": "' + agent_id + '", '
                     '"content": "<your answer>"}\'\n'
