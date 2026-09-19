@@ -217,3 +217,21 @@ class TestPresenceMatrix:
         assert rows[1].verdict == VERDICT_FAIL
         assert rows[1].axes == ("allowed_files",)
         assert rows[1].reasons == (REASON_AXIS_WIDENED,)
+
+    def test_an_empty_child_body_fails_like_the_absent_child(self):
+        """`allowed_files: []` reads back as the empty set, which is also "no restriction"."""
+        empty_child = DelegationScope(task_ids=frozenset({"t1"}), allowed_files=frozenset())
+        verdict = grade_chain([_receipt(0, scope=CEILING_WITH), _receipt(1, scope=empty_child)])
+        rows = _rows(verdict)
+        assert rows[1].verdict == VERDICT_FAIL
+        assert rows[1].axes == ("allowed_files",)
+        assert rows[1].reasons == (REASON_AXIS_WIDENED,)
+
+    def test_an_empty_parent_body_is_unrestricted(self):
+        """`allowed_files: []` on the ceiling means no restriction, so any child passes."""
+        empty_ceiling = DelegationScope(task_ids=frozenset({"t1", "t2"}), allowed_files=frozenset())
+        verdict = grade_chain([_receipt(0, scope=empty_ceiling), _receipt(1, scope=CHILD_WITH)])
+        rows = _rows(verdict)
+        assert rows[1].verdict == VERDICT_PASS
+        assert rows[1].axes == ()
+        assert rows[1].reasons == ()
