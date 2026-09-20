@@ -105,7 +105,7 @@ class QuarantineJournalEntry:
     seq: int
 
     @classmethod
-    def _from_ledger_entry(cls, entry: LedgerEntry) -> QuarantineJournalEntry:
+    def from_ledger_entry(cls, entry: LedgerEntry) -> QuarantineJournalEntry:
         payload = entry.payload
         return cls(
             event_type=_event_type_from_kind(entry.kind),
@@ -163,7 +163,7 @@ class QuarantineJournal:
             List of :class:`QuarantineJournalEntry` objects, oldest first.
         """
         reader = LedgerReader(self._ledger_dir)
-        return [QuarantineJournalEntry._from_ledger_entry(entry) for entry in reader.entries()]
+        return [QuarantineJournalEntry.from_ledger_entry(entry) for entry in reader.entries()]
 
     def verify(self) -> list[str]:
         """Verify the hash chain and return a list of error strings.
@@ -194,7 +194,7 @@ class QuarantineJournal:
             kind=_kind_for(event_type),
             payload={"task_title": task_title, "timestamp": timestamp, "reason": reason},
         )
-        return QuarantineJournalEntry._from_ledger_entry(entry)
+        return QuarantineJournalEntry.from_ledger_entry(entry)
 
     def record_quarantined(self, task_title: str, *, reason: str, timestamp: str = "") -> QuarantineJournalEntry:
         """Append a ``quarantined`` event for *task_title*.
