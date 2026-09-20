@@ -284,6 +284,17 @@ class DelegationLedger:
         safe = run_id.replace("/", "_").replace("\\", "_")
         return self._dir / f"{safe}.jsonl"
 
+    def head_path(self, run_id: str) -> Path:
+        """Return the chain-head sidecar path for ``run_id``.
+
+        Derives from :meth:`receipt_path` so the writer and
+        :func:`verify_run_chain` can never disagree on the filename - the
+        two previously built it independently, and a divergence (e.g. an
+        empty ``run_id``) would silently stop the sidecar from being read.
+        """
+        receipt = self.receipt_path(run_id)
+        return receipt.with_name(receipt.stem + _HEAD_SUFFIX)
+
     @contextlib.contextmanager
     def _append_lock(self, run_id: str) -> Iterator[None]:
         """Serialise the tail-read-through-append for ``run_id``.
@@ -448,8 +459,7 @@ class DelegationLedger:
         """
         with self._append_lock(run_id):
             prev_hmac, hop_count = self._tail(run_id)
-            receipt_path = self.receipt_path(run_id)
-            sidecar = receipt_path.with_name(receipt_path.stem + _HEAD_SUFFIX)
+            sidecar = self.head_path(run_id)
             body = {"run_id": run_id, "hop_count": hop_count, "head_hmac": prev_hmac}
             seal = _compute_hmac(self._key, "", body)
             write_atomic_json(sidecar, {**body, "seal": seal}, indent=None, sort_keys=True)
@@ -548,7 +558,7 @@ def verify_run_chain(
     # Check for a chain-head sidecar written by DelegationLedger.record_chain_head.
     # When present, the declared hop count and head HMAC are compared against the
     # reconstructed chain; a mismatch means the tail was removed after sealing.
-    sidecar_path = ledger_dir / f"{safe}{_HEAD_SUFFIX}"
+    sidecar_path = path.with_name(path.stem + _HEAD_SUFFIX)
     sealed: bool | None = None
     if sidecar_path.is_file():
         head: Any

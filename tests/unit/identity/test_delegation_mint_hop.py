@@ -390,6 +390,19 @@ def test_deleted_sidecar_reports_sealed_none_but_require_sealed_fails(store, aud
     assert any("missing" in e and "sealed" in e for e in strict.errors)
 
 
+def test_head_path_agrees_with_reader_for_empty_run_id(store, audit_root):
+    """head_path derives from receipt_path, so writer and reader cannot diverge.
+
+    An empty run id was the one case where the two independently-built paths
+    split (writer ``.jsonl.head.json`` vs reader ``.head.json``), silently
+    writing a sidecar nothing read. head_path removes the second derivation.
+    """
+    from bernstein.core.identity.delegation import DelegationLedger
+
+    ledger = DelegationLedger(root=audit_root, key=KEY)
+    assert ledger.head_path("") == ledger.receipt_path("").with_name(".jsonl.head.json")
+
+
 def test_forged_sidecar_without_key_is_detected(store, audit_root):
     """Re-minting the sidecar from the truncated file alone fails the seal check."""
     from bernstein.core.identity.delegation import DelegationLedger
