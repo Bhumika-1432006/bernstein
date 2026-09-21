@@ -17,17 +17,15 @@ Typical use::
 
     from bernstein.core.persistence.work_ledger import (
         KIND_TASK_COMPLETED, KIND_TASK_FAILED,
+        LedgerEntry,
     )
     from bernstein.core.persistence.masked_failure_report import (
-        AttemptRecord, scan_for_masked_failures,
+        scan_for_masked_failures,
     )
 
-    attempts = [
-        AttemptRecord(task_id="t1", kind=KIND_TASK_FAILED),
-        AttemptRecord(task_id="t1", kind=KIND_TASK_FAILED),
-        AttemptRecord(task_id="t1", kind=KIND_TASK_COMPLETED),
-    ]
-    reports = scan_for_masked_failures(attempts)
+    # Assuming `ledger` is a WorkLedger instance.
+    entries = ledger.read_all()
+    reports = scan_for_masked_failures(entries)
     # reports[0].failure_count_before_success == 2
     # reports[0].is_masked == True
 """
@@ -35,7 +33,7 @@ Typical use::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from bernstein.core.persistence.work_ledger import (
     KIND_TASK_ABANDONED,
@@ -66,6 +64,13 @@ _SUCCESS_KIND: str = KIND_TASK_COMPLETED
 _FAILURE_KIND: str = KIND_TASK_FAILED
 
 
+class AttemptLike(Protocol):
+    """Protocol for an attempt record that has a task_id and a kind."""
+
+    task_id: str
+    kind: str
+
+
 @dataclass(frozen=True, slots=True)
 class AttemptRecord:
     """One attempt transition from the work ledger.
@@ -80,7 +85,7 @@ class AttemptRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class MaskedFailureReport:
+class TaskAttemptMaskedFailureReport:
     """Summary of attempt history for one task.
 
     Attributes:
@@ -104,8 +109,10 @@ class MaskedFailureReport:
     is_masked: bool
 
 
-def count_masked_failures(task_id: str, attempts: Sequence[AttemptRecord]) -> MaskedFailureReport:
-    """Return a :class:`MaskedFailureReport` for *task_id* over *attempts*.
+def count_masked_failures(
+    task_id: str, attempts: Sequence[AttemptLike]
+) -> TaskAttemptMaskedFailureReport:
+    """Return a :class:`TaskAttemptMaskedFailureReport` for *task_id* over *attempts*.
 
     Only records whose ``task_id`` equals *task_id* are considered; the rest
     are ignored so the caller may pass a mixed sequence and filter implicitly.
@@ -122,12 +129,14 @@ def count_masked_failures(task_id: str, attempts: Sequence[AttemptRecord]) -> Ma
         attempts: Ordered sequence of attempt records (oldest first).
 
     Returns:
-        A :class:`MaskedFailureReport` for the task.
+        A :class:`TaskAttemptMaskedFailureReport` for the task.
     """
-    task_attempts = [a for a in attempts if a.task_id == task_id and a.kind in _TERMINAL_KINDS]
+    task_attempts = [
+        a for a in attempts if a.task_id == task_id and a.kind in _TERMINAL_KINDS
+    ]
 
     if not task_attempts:
-        return MaskedFailureReport(
+        return TaskAttemptMaskedFailureReport(
             task_id=task_id,
             terminal_transition_count=0,
             failure_count_before_success=0,
@@ -139,7 +148,7 @@ def count_masked_failures(task_id: str, attempts: Sequence[AttemptRecord]) -> Ma
     terminal_transition_count = len(task_attempts)
 
     if final.kind != _SUCCESS_KIND:
-        return MaskedFailureReport(
+        return TaskAttemptMaskedFailureReport(
             task_id=task_id,
             terminal_transition_count=terminal_transition_count,
             failure_count_before_success=0,
@@ -154,7 +163,7 @@ def count_masked_failures(task_id: str, attempts: Sequence[AttemptRecord]) -> Ma
         else:
             break
 
-    return MaskedFailureReport(
+    return TaskAttemptMaskedFailureReport(
         task_id=task_id,
         terminal_transition_count=terminal_transition_count,
         failure_count_before_success=failure_count,
@@ -163,8 +172,10 @@ def count_masked_failures(task_id: str, attempts: Sequence[AttemptRecord]) -> Ma
     )
 
 
-def scan_for_masked_failures(attempts: Sequence[AttemptRecord]) -> list[MaskedFailureReport]:
-    """Return one :class:`MaskedFailureReport` per distinct task id in *attempts*.
+def scan_for_masked_failures(
+    attempts: Sequence[AttemptLike]
+) -> list[TaskAttemptMaskedFailureReport]:
+    """Return one :class:`TaskAttemptMaskedFailureReport` per distinct task id in *attempts*.
 
     Tasks are returned in the order their first attempt record appears.  Only
     tasks that have at least one terminal-kind transition are included; in-flight
@@ -176,14 +187,22 @@ def scan_for_masked_failures(attempts: Sequence[AttemptRecord]) -> list[MaskedFa
     Returns:
         List of reports, one per task id that has any terminal transition.
     """
-    bucketed: dict[str, list[AttemptRecord]] = {}
+    bucketed: dict[str, list[AttemptLike]] = {}
     seen_order: list[str] = []
     for attempt in attempts:
-        if attempt.kind not in _TERMINAL_KINDS:
-            continue
         if attempt.task_id not in bucketed:
             bucketed[attempt.task_id] = []
             seen_order.append(attempt.task_id)
         bucketed[attempt.task_id].append(attempt)
 
-    return [count_masked_failures(tid, bucketed[tid]) for tid in seen_order]
+    reports: list[TaskAttemptMaskedFailureReport] = []
+    for tid in seen_order:
+        task_attempts = bucketed[tid]
+        # We only want to create a report if there is at least one terminal kind.
+        # But count_masked_failures will return a report with is_masked=False and
+        # failure_count_before_success=0 if there are no terminal kinds.
+        # We can filter out those with terminal_transition_count==0.
+        report = count_masked_failures(tid, task_attempts)
+        if report.terminal_transition_count > 0:
+            reports.append(report)
+    return reports

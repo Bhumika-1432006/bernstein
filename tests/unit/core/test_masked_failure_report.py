@@ -8,6 +8,7 @@ from bernstein.core.persistence.masked_failure_report import (
     AttemptRecord,
     count_masked_failures,
     scan_for_masked_failures,
+    TaskAttemptMaskedFailureReport,
 )
 from bernstein.core.persistence.work_ledger import (
     KIND_TASK_ABANDONED,
@@ -151,6 +152,7 @@ class TestScanForMaskedFailures:
         reports = scan_for_masked_failures(attempts)
         assert len(reports) == 1
         assert reports[0].task_id == "t1"
+        assert isinstance(reports[0], TaskAttemptMaskedFailureReport)
 
     def test_two_tasks_returned_in_first_attempt_order(self) -> None:
         attempts = [
@@ -160,6 +162,7 @@ class TestScanForMaskedFailures:
         ]
         reports = scan_for_masked_failures(attempts)
         assert [r.task_id for r in reports] == ["t2", "t1"]
+        assert all(isinstance(r, TaskAttemptMaskedFailureReport) for r in reports)
 
     def test_masked_task_identified_among_others(self) -> None:
         attempts = [
@@ -193,3 +196,72 @@ class TestScanForMaskedFailures:
         assert len(reports) == 2
         assert all(r.final_outcome == KIND_TASK_ABANDONED for r in reports)
         assert all(not r.is_masked for r in reports)
+
+# ---------------------------------------------------------------------------
+# LedgerEntry compatibility
+# ---------------------------------------------------------------------------
+
+
+class TestLedgerEntryCompatibility:
+    """Ensure the projection works with LedgerEntry from the work ledger."""
+
+    def test_scan_for_masked_failures_with_ledger_entry(self) -> None:
+        from bernstein.core.persistence.work_ledger import LedgerEntry
+
+        # Create a few LedgerEntry objects for the same task.
+        entry1 = LedgerEntry(
+            seq=0,
+            prev_hash="0" * 64,
+            kind=KIND_TASK_FAILED,
+            task_id="task1",
+            payload={},
+            entry_hash="1" * 64,
+            ts=1000.0,
+            redactions=0,
+            schema_version=1,
+        )
+        entry2 = LedgerEntry(
+            seq=1,
+            prev_hash=entry1.entry_hash,
+            kind=KIND_TASK_FAILED,
+            task_id="task1",
+            payload={},
+            entry_hash="2" * 64,
+            ts=1001.0,
+            redactions=0,
+            schema_version=1,
+        )
+        entry3 = LedgerEntry(
+            seq=2,
+            prev_hash=entry2.entry_hash,
+            kind=KIND_TASK_COMPLETED,
+            task_id="task1",
+            payload={},
+            entry_hash="3" * 64,
+            ts=1002.0,
+            redactions=0,
+            schema_version=1,
+        )
+        # Another task that succeeds on first try.
+        entry4 = LedgerEntry(
+            seq=3,
+            prev_hash=entry3.entry_hash,
+            kind=KIND_TASK_COMPLETED,
+            task_id="task2",
+            payload={},
+            entry_hash="4" * 64,
+            ts=1003.0,
+            redactions=0,
+            schema_version=1,
+        )
+
+        attempts = [entry1, entry2, entry3, entry4]
+        reports = scan_for_masked_failures(attempts)
+
+        # We expect two reports: one for task1 (masked) and one for task2 (not masked).
+        assert len(reports) == 2
+        by_id = {r.task_id: r for r in reports}
+        assert by_id["task1"].is_masked
+        assert by_id["task1"].failure_count_before_success == 2
+        assert not by_id["task2"].is_masked
+        assert by_id["task2"].failure_count_before_success == 0
