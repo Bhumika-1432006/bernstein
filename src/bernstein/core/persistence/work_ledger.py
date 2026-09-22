@@ -825,7 +825,7 @@ class LedgerReader:
         return LedgerVerification(ok=not errors, head_hash=prev_hash, entries=entries, errors=errors)
     def __enter__(self) -> LedgerReader:
         """Enter the context manager.
-        
+
         Returns:
             This LedgerReader instance.
         """
