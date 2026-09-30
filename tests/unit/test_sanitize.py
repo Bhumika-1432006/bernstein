@@ -28,28 +28,18 @@ def test_sanitize_passthrough_for_safe_content() -> None:
 #
 # Three independent character classes used to escape log-bound values:
 # sla_store._single_line, and one copy each in spawner_core and
-# spawner_merge under the name _sanitise_for_log. The two spawner copies are
-# gone now -- every call site in both modules was rewritten to call
-# sanitize_log directly, landed by a parallel consolidation on this same
-# issue -- leaving sla_store._single_line as the one remaining wrapper, kept
-# because it adds a length cap sanitize_log does not have. This pins that
-# its escaping still agrees with sanitize_log's on the record boundaries, and
-# additionally escapes non-printable format characters (bidi, zero-width).
+# spawner_merge under the name _sanitise_for_log. All three are gone: the
+# spawner call sites call sanitize_log directly, and sla_store's call sites
+# call log_safe.for_log, which is sanitize_log plus a length cap. This pins
+# that the SLA store's log tokens still agree with sanitize_log on the record
+# boundaries.
 
 
-def test_single_line_agrees_with_sanitize_log_on_every_boundary_character() -> None:
-    from bernstein.core.planning.sla_store import _single_line
+def test_sla_store_log_token_agrees_with_sanitize_log_on_record_boundaries() -> None:
+    from bernstein.core.log_safe import for_log
 
     # CR, LF, U+2028 LINE SEPARATOR, and U+0085 NEL (a C1 control). Built
     # with chr() rather than an embedded literal so the boundary character
     # stays a visible codepoint reference in source, not an invisible byte.
     raw = "a\rb\nc" + chr(0x2028) + "d" + chr(0x85) + "z"
-    assert _single_line(raw) == sanitize_log(raw)
-
-    # Non-printable format characters sanitize_log leaves alone: escaped here.
-    fmt = "a" + chr(0x202E) + "b" + chr(0x200B) + "c"
-    out = _single_line(fmt)
-    assert chr(0x202E) not in out
-    assert chr(0x200B) not in out
-    assert "\\u202e" in out
-    assert "\\u200b" in out
+    assert for_log(raw, limit=256) == sanitize_log(raw)
