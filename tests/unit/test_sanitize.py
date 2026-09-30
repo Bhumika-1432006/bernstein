@@ -33,9 +33,8 @@ def test_sanitize_passthrough_for_safe_content() -> None:
 # sanitize_log directly, landed by a parallel consolidation on this same
 # issue -- leaving sla_store._single_line as the one remaining wrapper, kept
 # because it adds a length cap sanitize_log does not have. This pins that
-# its escaping still agrees with sanitize_log's on every character that
-# actually matters for log injection, so a future change to the boundary
-# character set only has to change it here.
+# its escaping still agrees with sanitize_log's on the record boundaries, and
+# additionally escapes non-printable format characters (bidi, zero-width).
 
 
 def test_single_line_agrees_with_sanitize_log_on_every_boundary_character() -> None:
@@ -46,3 +45,11 @@ def test_single_line_agrees_with_sanitize_log_on_every_boundary_character() -> N
     # stays a visible codepoint reference in source, not an invisible byte.
     raw = "a\rb\nc" + chr(0x2028) + "d" + chr(0x85) + "z"
     assert _single_line(raw) == sanitize_log(raw)
+
+    # Non-printable format characters sanitize_log leaves alone: escaped here.
+    fmt = "a" + chr(0x202E) + "b" + chr(0x200B) + "c"
+    out = _single_line(fmt)
+    assert chr(0x202E) not in out
+    assert chr(0x200B) not in out
+    assert "\\u202e" in out
+    assert "\\u200b" in out

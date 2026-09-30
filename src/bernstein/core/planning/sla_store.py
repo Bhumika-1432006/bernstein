@@ -109,6 +109,9 @@ def _single_line(value: object, *, limit: int = 256) -> str:
     untrusted value always occupies exactly one line of bounded width.
     """
     text = sanitize_log(str(value))
+    text = "".join(
+        c if c.isprintable() else (f"\\u{ord(c):04x}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08x}") for c in text
+    )
     if len(text) > limit:
         text = text[:limit] + "...(truncated)"
     return text
