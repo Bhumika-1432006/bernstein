@@ -1,7 +1,7 @@
 """Structural assertions on ``.github/workflows/post-ci-dispatcher.yml``.
 
 The dispatcher consolidates the sibling ``workflow_run: CI completed``
-listeners (auto-release, auto-heal, bernstein-ci-fix, bisect-on-red)
+listeners (auto-release, auto-heal, bisect-on-red)
 into a single boot that calls each child via ``workflow_call``. The
 acceptance criteria are encoded as tests here so the consolidation
 cannot silently regress.
@@ -26,7 +26,6 @@ DISPATCHER = REPO_ROOT / ".github" / "workflows" / "post-ci-dispatcher.yml"
 CHILDREN = (
     "auto-release",
     "auto-heal",
-    "bernstein-ci-fix",
     "bisect-on-red",
 )
 
@@ -47,7 +46,6 @@ CHILDREN = (
 EXPECTED_CHILD_SECRETS: dict[str, frozenset[str]] = {
     "auto-release": frozenset(),
     "auto-heal": frozenset({"BERNSTEIN_AUTOSYNC_TOKEN"}),
-    "bernstein-ci-fix": frozenset({"BERNSTEIN_AUTOSYNC_TOKEN", "GEMINI_API_KEY"}),
     "bisect-on-red": frozenset(),
 }
 
@@ -73,13 +71,13 @@ def test_dispatcher_file_exists() -> None:
 
 
 def test_dispatcher_listens_to_workflow_run_ci_main(dispatcher: dict[str, Any]) -> None:
-    """Single workflow_run: CI completed listener on main."""
+    """Single workflow_run: CI completed listener on main and the queue ref."""
     on = _on(dispatcher)
     wfr = on.get("workflow_run")
     assert isinstance(wfr, dict)
     assert wfr.get("workflows") == ["CI"]
     assert wfr.get("types") == ["completed"]
-    assert wfr.get("branches") == ["main"]
+    assert wfr.get("branches") == ["main", "gh-readonly-queue/main/**"]
 
 
 def test_dispatcher_has_meta_job(dispatcher: dict[str, Any]) -> None:
@@ -129,26 +127,6 @@ def test_dispatcher_calls_each_child(dispatcher: dict[str, Any], child: str) -> 
     )
 
 
-def test_bernstein_ci_fix_serialised_after_auto_heal(dispatcher: dict[str, Any]) -> None:
-    """bernstein-ci-fix runs only when auto-heal did NOT open a heal PR.
-
-    Acceptance criterion: auto-heal and bernstein-ci-fix call each other
-    via dispatcher (instead of both firing in parallel on the same
-    failing SHA). The serialisation is implemented as needs: auto-heal
-    plus a gate on auto-heal's heal_outcome output.
-    """
-    jobs = dispatcher["jobs"]
-    ci_fix = jobs["bernstein-ci-fix"]
-    needs = ci_fix.get("needs")
-    if isinstance(needs, str):
-        needs = [needs]
-    assert isinstance(needs, list)
-    assert "auto-heal" in needs, "bernstein-ci-fix must declare needs: auto-heal"
-    if_cond = ci_fix.get("if", "")
-    assert isinstance(if_cond, str)
-    assert "needs.auto-heal" in if_cond, "bernstein-ci-fix.if must inspect needs.auto-heal to serialise the heals"
-
-
 def test_dispatcher_concurrency_per_sha(dispatcher: dict[str, Any]) -> None:
     """Dispatcher owns the per-SHA concurrency group covering the fanout."""
     conc = dispatcher.get("concurrency")
@@ -169,7 +147,6 @@ def test_dispatcher_workflow_permissions_minimal(dispatcher: dict[str, Any]) -> 
     [
         ".github/workflows/auto-release.yml",
         ".github/workflows/auto-heal.yml",
-        ".github/workflows/bernstein-ci-fix.yml",
         ".github/workflows/bisect-on-red.yml",
     ],
 )
@@ -200,8 +177,8 @@ def test_children_expose_workflow_call(child_yaml: str) -> None:
 #
 # That has bitten this dispatcher twice. The second time, a callee job
 # gained `actions: write` while the caller kept its narrower grant, and
-# auto-release, auto-heal, bernstein-ci-fix and bisect-on-red were all
-# silently dead for five days across 83 consecutive runs. The assertion
+# auto-release, auto-heal and bisect-on-red were all silently dead for
+# five days across 83 consecutive runs. The assertion
 # below turns that class of change into a red build instead.
 
 _PERMISSION_LEVELS = {"none": 0, "read": 1, "write": 2}
@@ -276,21 +253,20 @@ def test_dispatcher_grants_cover_callee_requests(dispatcher: dict[str, Any], chi
 # ---------------------------------------------------------------------------
 # Merge-queue readiness: the auto-release chain must survive the queue (#2966)
 #
-# Chain under the queue:
-#   queue merges -> push to `main` at the SAME SHA the queue tested
-#                -> ci.yml (push) -> workflow_run -> this dispatcher
+# A version bump merged through the queue fast-forwards `main` onto the SHA
+# its `merge_group` run already built, so the commit has no `push` CI run.
+# The only CI run for it reports `head_branch` on a queue ref, which this
+# dispatcher must admit:
+#
+#   queue builds -> merge_group CI -> workflow_run -> this dispatcher
 #                -> auto-release -> tag -> publish.
 #
-# Two properties keep that chain intact, and both are one careless edit away
-# from silently breaking (green CI, no tag, no error). See
+# These properties keep that chain intact, and each is one careless edit
+# away from silently breaking (green CI, no tag, no error). See
 # docs/operations/merge-queue.md :: "Auto-release through the queue".
 # ---------------------------------------------------------------------------
 
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
-
-# The merge queue runs CI on an ephemeral ref named
-# `gh-readonly-queue/<base>/pr-<n>-<base_sha>`, never on `main` itself.
-MERGE_QUEUE_REF_PREFIX = "gh-readonly-queue/"
 
 # The auto-release gate keys on a `version = ` change in this file, so it must
 # never be excluded from the `push` CI run the dispatcher listens for.
@@ -302,27 +278,25 @@ def ci_workflow() -> dict[str, Any]:
     return _load(CI_WORKFLOW)
 
 
-def test_dispatcher_does_not_listen_on_merge_queue_refs(dispatcher: dict[str, Any]) -> None:
-    """A queue ref must never dispatch auto-release.
+def test_dispatcher_listens_on_main_queue_refs_for_auto_release(
+    dispatcher: dict[str, Any],
+) -> None:
+    """A version bump merged through the queue has no push CI run.
 
-    `merge_group` CI runs report `head_branch` as the ephemeral
-    `gh-readonly-queue/...` ref. Those runs are speculative - the entry can
-    still be ejected - so tagging off one would publish a release for a
-    commit that never landed on `main`. The `branches: [main]` filter is
-    what prevents it.
+    The queue fast-forwards `main` onto the SHA its `merge_group` run
+    already built, so the only CI run for that commit reports
+    `head_branch = gh-readonly-queue/main/pr-<n>-<base_sha>`. The trigger
+    filter must admit those refs so the dispatcher boots, while the
+    `auto-release` job gates the queue-ref path on `success` - a failed
+    queue entry never lands on `main`, so it must not tag or alert.
     """
     wfr = _on(dispatcher).get("workflow_run")
     assert isinstance(wfr, dict)
     branches = wfr.get("branches")
-    assert branches == ["main"], (
-        "dispatcher must stay filtered to `branches: [main]`. Widening it to the "
-        f"merge queue's `{MERGE_QUEUE_REF_PREFIX}**` refs would tag releases from "
-        "speculative queue builds that may never merge."
+    assert branches == ["main", "gh-readonly-queue/main/**"], (
+        "dispatcher trigger filter must admit main-based queue refs so a "
+        "queue-merged version bump still boots the dispatcher."
     )
-    for pattern in branches:
-        assert not pattern.startswith(MERGE_QUEUE_REF_PREFIX), (
-            f"`{pattern}` matches a merge-queue ephemeral ref; see above"
-        )
 
 
 def test_ci_push_trigger_still_covers_main(ci_workflow: dict[str, Any]) -> None:

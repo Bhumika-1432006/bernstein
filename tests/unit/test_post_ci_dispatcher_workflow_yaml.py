@@ -1,8 +1,8 @@
 """Structural assertions on the Post-CI dispatcher's routing filter.
 
 ``.github/workflows/post-ci-dispatcher.yml`` is the sole invocation path
-for ``auto-release.yml``, ``auto-heal.yml``, ``bernstein-ci-fix.yml`` and
-``bisect-on-red.yml``: each of those declares ``on: workflow_call:`` and
+for ``auto-release.yml``, ``auto-heal.yml`` and ``bisect-on-red.yml``:
+each of those declares ``on: workflow_call:`` and
 nothing else. Nothing publishes a failing check when the dispatcher stops
 routing, so a filter that is one conclusion too wide disables automated
 releases silently.
@@ -47,7 +47,6 @@ INERT_CONCLUSIONS = {"cancelled", "skipped"}
 CHILDREN = {
     "auto-release": "./.github/workflows/auto-release.yml",
     "auto-heal": "./.github/workflows/auto-heal.yml",
-    "bernstein-ci-fix": "./.github/workflows/bernstein-ci-fix.yml",
     "bisect-on-red": "./.github/workflows/bisect-on-red.yml",
 }
 
@@ -123,9 +122,23 @@ def test_auto_release_jobs_still_gate_on_success() -> None:
 
 
 def test_failure_routes_require_exactly_failure(dispatcher: dict) -> None:
-    for job_name in ("auto-heal", "bernstein-ci-fix", "bisect-on-red"):
+    for job_name in ("auto-heal", "bisect-on-red"):
         condition = " ".join(dispatcher["jobs"][job_name]["if"].split())
         assert "needs.meta.outputs.conclusion == 'failure'" in condition
+
+
+def test_auto_heal_routes_bot_authored_main_workflow_dispatch_failure(dispatcher: dict) -> None:
+    """Cadenced full CI is a trusted bot-authored workflow_dispatch on main."""
+    condition = " ".join(dispatcher["jobs"]["auto-heal"]["if"].split())
+
+    assert "needs.meta.outputs.head_branch == 'main'" in condition
+    assert "needs.meta.outputs.head_repo == github.repository" in condition
+    assert "needs.meta.outputs.actor_login != 'github-actions[bot]'" in condition
+    assert "needs.meta.outputs.event == 'workflow_dispatch'" in condition
+    assert (
+        "(needs.meta.outputs.actor_login != 'github-actions[bot]' || "
+        "needs.meta.outputs.event == 'workflow_dispatch')" in condition
+    )
 
 
 def test_dispatcher_still_routes_to_every_child(dispatcher: dict) -> None:
@@ -154,3 +167,17 @@ def test_upstream_trigger_is_still_a_single_workflow(dispatcher: dict) -> None:
     on = dispatcher.get("on", dispatcher.get(True))
     assert on["workflow_run"]["workflows"] == ["CI"]
     assert on["workflow_run"]["types"] == ["completed"]
+
+
+def test_auto_release_routes_queue_refs_only_on_success(dispatcher: dict) -> None:
+    """A version bump merged through the queue has no push CI run.
+
+    The only CI run for that commit reports the queue ref, so the
+    auto-release job must admit `gh-readonly-queue/main/...`. A failed
+    merge_group entry never lands on main and must not reach the stale
+    release alert, so the queue-ref path is gated on `success`.
+    """
+    condition = " ".join(dispatcher["jobs"]["auto-release"]["if"].split())
+    assert "needs.meta.outputs.head_branch == 'main'" in condition
+    assert "startsWith(needs.meta.outputs.head_branch, 'gh-readonly-queue/main/')" in condition
+    assert "needs.meta.outputs.conclusion == 'success'" in condition

@@ -95,6 +95,28 @@ required-context coverage by
 | `typecheck (packages/vscode)` | `typecheck-ts.yml` :: `typecheck` | Yes - `merge_group: {}` | **No - see below** |
 | `typecheck (web)` | `typecheck-ts.yml` :: `typecheck` | Yes - `merge_group: {}` | **No - see below** |
 | `typecheck (templates/cloudflare-mcp-server)` | `typecheck-ts.yml` :: `typecheck` | Yes - `merge_group: {}` | **No - see below** |
+| `quorum` | `quorum.yml` :: `quorum` | Yes - `merge_group: {}` | **Yes - required by name through an organization ruleset** |
+
+`quorum` is required through an organization ruleset rather than the
+repository one, but by context name like every other row. It was pinned as a
+required *workflow* until 2026-09-17, and that form could only be satisfied
+by a run of the file itself: part of the verdict turns on elapsed time - the
+72-hour objection window in the charter - so a pull request whose window had
+closed kept the red check it was given hours earlier, and the only way to
+move it was a fresh pull-request event (close and reopen, in practice). A
+required context can be answered again whenever the answer changes, by a
+re-run or by re-publishing the context with
+`scripts/publish_required_check.py` from a workflow that holds
+`checks: write`.
+
+What the name buys back has to be replaced deliberately. A branch that can
+run workflows in this repository can publish a context by name, which a
+pinned workflow path could not; fork pull requests cannot, because their
+`GITHUB_TOKEN` is read-only. The replacement is a privileged re-evaluation
+that recomputes the verdict from the default branch and republishes it, so a
+published `quorum` that disagrees with the rules is overwritten rather than
+merged on. What the check decides, and why a branch rule cannot decide it
+instead, is written at the top of `scripts/quorum_check.py`.
 
 `typecheck-ts` occupies four rows because it publishes four contexts: its
 job is `typecheck (${{ matrix.package }})` and branch protection matches a
@@ -223,16 +245,25 @@ docs-only.
 
 ## macOS coverage under the queue
 
-The macOS matrix (`test-macos`, `adapter-integration-macos`) is **gated**:
-it runs on `push` to `main`, on macOS-sensitive diffs, and on the
-`macos-needed` label. On a queued group the label and `push` branches cannot
-fire, so `macos_sensitive` - computed from the group's combined diff - is what
-decides: a group touching a macOS-sensitive path runs the macOS cells in the
-queue, and a group that does not skips them. The `CI gate` roll-up tolerates
-exactly that skip (see `MACOS_SKIP_EVENTS` in `ci.yml`). Coverage is preserved
-because the **post-merge `push` to `main`** runs the full macOS suite
-un-gated, and `ci-macos-nightly.yml` is the daily safety net. The queue
-validates the integrated combination; the merged commit validates macOS.
+The macOS matrix (`test-macos`, `adapter-integration-macos`) **never runs in
+the queue**. Both jobs carry `github.event_name != 'merge_group'`.
+
+The reason is that a queue build cannot observe anything new on that surface.
+The group's merge commit is the tree that lands on `main`, and the
+**post-merge `push` to `main`** re-runs the same platform checks against it
+minutes later. Running them inside the group buys a duplicate of a result the
+push produces anyway, while the group sits at the head of the queue and every
+entry behind it waits.
+
+The `CI gate` roll-up tolerates the skip unconditionally on this event -- see
+`MACOS_UNCONDITIONAL_SKIP_EVENTS` in `ci.yml`, a subset of `MACOS_SKIP_EVENTS`
+-- so a queued group is never wedged waiting on a job that cannot start.
+
+Coverage on what actually lands: the post-merge push runs
+`adapter-integration-macos` on every commit and the `test-macos` shards
+whenever the diff touches a macOS-sensitive path, and `ci-macos-nightly.yml`
+re-runs the whole macOS suite at 06:00 UTC daily. The queue validates the
+integrated combination; the merged commit validates macOS.
 
 ## Auto-release through the queue
 
@@ -243,10 +274,17 @@ that commit changed `version = ` in `pyproject.toml`. Two questions had to
 be answered before the queue can be enabled.
 
 **Q1: do merge-queue CI runs dispatch the release listener?**
-No, and that is the desired behaviour. A `merge_group` run reports
-`head_branch = gh-readonly-queue/main/pr-<n>-<base_sha>`, which the
-dispatcher's `branches: [main]` filter excludes. Nothing is ever tagged
-from a queue ref that has not merged.
+No - and the dispatcher still has to route them anyway. A `merge_group`
+run reports `head_branch = gh-readonly-queue/main/pr-<n>-<base_sha>`, which
+the dispatcher's `branches: [main]` trigger filter excludes, so no listener
+run boots from the queue ref itself. But that merge_group run is the only
+CI the version-bump commit ever gets: the queue fast-forwards `main` onto
+the SHA it already built, so no `push` CI run follows. The dispatcher's
+`auto-release` job therefore also admits
+`startsWith(head_branch, 'gh-readonly-queue/main/')` and routes that single
+queue run to the release gate. Nothing is tagged from a queue ref that has
+not merged - the gate still inspects the triggering commit and the commit
+is on `main` by the time it runs.
 
 **Q2: does the post-queue merge still fire the release listener?**
 Yes. When a merge group goes green, GitHub advances the base branch and

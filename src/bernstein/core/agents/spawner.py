@@ -22,11 +22,11 @@ from bernstein.core.agents.spawner_core import (
     _render_predecessor_context,
     _render_prompt,
     _render_signal_check,
-    _sanitise_for_log,
     logger,
 )
 
 # --- Warm-pool helpers (routing / tool allowlist) --------------------------
+from bernstein.core.agents.spawner_env import build_spawner_env
 from bernstein.core.agents.spawner_warm_pool import (
     _TOOL_ALLOWLIST_ENV_VAR,
     _load_role_config,
@@ -52,9 +52,9 @@ __all__ = [
     "_render_predecessor_context",
     "_render_prompt",
     "_render_signal_check",
-    "_sanitise_for_log",
     "_select_batch_config",
     "_should_use_router",
+    "build_spawner_env",
     "build_tool_allowlist_env",
     "check_tool_allowed",
     "logger",

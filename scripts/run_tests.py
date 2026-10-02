@@ -22,16 +22,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping
+    from multiprocessing.sharedctypes import Synchronized
 
 # Changed paths for which an empty affected set is a coverage hole rather than
 # a legitimate no-op, so the shards fail closed instead of reporting green.
@@ -88,6 +93,11 @@ _THREAD_EXHAUSTION_MARKER = "RuntimeError: can't start new thread"
 OUTCOME_PASSED = "passed"
 OUTCOME_NO_TESTS = "no-tests"
 OUTCOME_FAILED = "failed"
+# A file whose process died before pytest printed anything to report on: a
+# segfault, an OOM kill, a hard exit from inside a test. It counts towards the
+# same failure total, but there is no failure section to quote, so it is
+# reported by its exit status instead of by whatever the file printed last.
+OUTCOME_CRASHED = "crashed"
 
 # pytest's terminal summary counts, e.g. "1 failed, 2 passed in 0.30s".
 _PYTEST_COUNT_RE = re.compile(
@@ -109,6 +119,65 @@ MEMORY_HEAVY_FILES: frozenset[str] = frozenset(
         "test_volunteer_sandbox_egress.py",
     }
 )
+
+# pytest builds every ``tmp_path`` under ``$PYTEST_DEBUG_TEMPROOT`` and keeps a
+# ``pytest-current`` symlink in the ``pytest-of-<user>`` directory it creates
+# there. Workers that inherit one root rewrite that symlink concurrently and
+# the loser fails on whichever test was building a ``tmp_path`` at the time
+# (issue #5777), so each worker is handed a root of its own instead.
+PYTEST_TEMPROOT_ENV = "PYTEST_DEBUG_TEMPROOT"
+
+#: Prefix of the run-unique parent directory holding one root per worker.
+TEMP_ROOT_PREFIX = "bernstein-tests-"
+
+#: This pool worker's own temporary root, claimed once by
+#: ``_bind_worker_temp_root`` and read by every ``run_file`` call it serves.
+_WORKER_TEMP_ROOT: Path | None = None
+
+
+def create_run_temp_parent() -> Path:
+    """Create the run-unique parent directory that holds every worker root."""
+    return Path(tempfile.mkdtemp(prefix=TEMP_ROOT_PREFIX))
+
+
+def worker_temp_root(parent: Path, index: int) -> Path:
+    """Create and return worker *index*'s own pytest temporary root."""
+    root = parent / f"w{index}"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def remove_run_temp_parent(parent: Path | None) -> None:
+    """Remove the run parent, and with it every worker root beneath it."""
+    if parent is None:
+        return
+    shutil.rmtree(parent, ignore_errors=True)
+
+
+def worker_env(temp_root: Path | None) -> dict[str, str]:
+    """Return the child environment for a worker owning *temp_root*.
+
+    A copy, never the live mapping: the parent process keeps whatever
+    ``PYTEST_DEBUG_TEMPROOT`` it was started with.
+    """
+    env = dict(os.environ)
+    if temp_root is not None:
+        env[PYTEST_TEMPROOT_ENV] = str(temp_root)
+    return env
+
+
+def _bind_worker_temp_root(parent: str, counter: Synchronized[int]) -> None:
+    """Pool initializer: claim the next worker index under *parent*.
+
+    ``counter`` is shared across the pool so the index is unique per worker
+    rather than per submitted file: a worker outlives the file it was started
+    for, so a per-file index would let two live workers share a root.
+    """
+    global _WORKER_TEMP_ROOT
+    with counter.get_lock():
+        index = counter.value
+        counter.value = index + 1
+    _WORKER_TEMP_ROOT = worker_temp_root(Path(parent), index)
 
 
 def split_memory_heavy(files: list[Path]) -> tuple[list[Path], list[Path]]:
@@ -149,6 +218,8 @@ def executed_test_count(counts: dict[str, int]) -> int:
 def classify_file_outcome(code: int, output: str) -> str:
     """Classify one test file's subprocess result.
 
+    - ``OUTCOME_CRASHED``: the process exited non-zero and printed no pytest
+      terminal summary, so it died before pytest could report anything.
     - ``OUTCOME_FAILED``: pytest reported a failure, *or* exited 0 without a
       terminal summary (the process was replaced mid-run).
     - ``OUTCOME_NO_TESTS``: pytest ran to completion and executed nothing
@@ -158,6 +229,8 @@ def classify_file_outcome(code: int, output: str) -> str:
     if code == 5:
         return OUTCOME_NO_TESTS
     if code != 0:
+        if summarize_pytest_counts(output) is None:
+            return OUTCOME_CRASHED
         return OUTCOME_FAILED
     counts = summarize_pytest_counts(output)
     if counts is None:
@@ -385,11 +458,26 @@ def shard_files(
     return [f for j, f in enumerate(files) if j % shard_count == shard_index - 1]
 
 
-def run_file(path: Path, extra_args: list[str], coverage: bool = False) -> tuple[Path, int, float, str]:
-    """Run a single test file in a subprocess. Returns (path, exitcode, duration, output).
+def run_file(
+    path: Path,
+    extra_args: list[str],
+    coverage: bool = False,
+    temp_root: Path | None = None,
+) -> tuple[Path, int, float, str, str]:
+    """Run a single test file in a subprocess.
+
+    Returns ``(path, exitcode, duration, output, stderr)``. ``output`` is stdout
+    and stderr combined, as every caller reads it; ``stderr`` is also returned on
+    its own because the suite runs uncaptured, so when the process dies without a
+    pytest summary its stderr is the only part of the output that is about the
+    death rather than about some test that printed as it went.
 
     When ``coverage`` is True, the process is wrapped in ``coverage run`` with a
     parallel-safe data file so that many subprocesses can be combined later.
+
+    ``temp_root`` overrides the pytest temporary root for this subprocess; it
+    defaults to the root bound to the calling pool worker, or to whatever the
+    parent inherited when there is none.
     """
     if coverage:
         cmd = [
@@ -424,10 +512,16 @@ def run_file(path: Path, extra_args: list[str], coverage: bool = False) -> tuple
             *extra_args,
         ]
     start = time.monotonic()
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=test_file_timeout_seconds())
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=test_file_timeout_seconds(),
+        env=worker_env(temp_root if temp_root is not None else _WORKER_TEMP_ROOT),
+    )
     duration = time.monotonic() - start
     output = result.stdout + result.stderr
-    return path, result.returncode, duration, output
+    return path, result.returncode, duration, output, result.stderr
 
 
 def retry_on_thread_exhaustion(
@@ -436,29 +530,64 @@ def retry_on_thread_exhaustion(
     code: int,
     output: str,
     coverage: bool = False,
-) -> tuple[int, float, str] | None:
+) -> tuple[int, float, str, str] | None:
     """Re-run *path* once serially when it failed from OS thread exhaustion.
 
-    Returns the retry ``(code, duration, output)`` when the original failure
+    Returns the retry ``(code, duration, output, stderr)`` when the original failure
     carried the thread-exhaustion marker, otherwise ``None`` (no retry). The
     retry runs the same isolated subprocess as ``run_file``; because the caller
     invokes it serially, the transient thread pressure has cleared by then.
     """
     if code == 0 or _THREAD_EXHAUSTION_MARKER not in output:
         return None
-    _path, retry_code, retry_duration, retry_output = run_file(path, extra_args, coverage=coverage)
-    return retry_code, retry_duration, retry_output
+    _path, retry_code, retry_duration, retry_output, retry_stderr = run_file(path, extra_args, coverage=coverage)
+    return retry_code, retry_duration, retry_output, retry_stderr
 
 
-def _print_failure_summary(output: str) -> None:
+#: How much of a crashed file's stderr to quote under its report line.
+_CRASH_STDERR_LINES = 30
+
+
+def _format_exit_status(code: int) -> str:
+    """Describe a subprocess exit status, naming the signal when one killed it."""
+    if code >= 0:
+        return f"exit code {code}"
+    try:
+        return f"killed by signal {-code} ({signal.Signals(-code).name})"
+    except ValueError:
+        return f"killed by signal {-code}"
+
+
+def _print_crash_detail(stderr: str, exit_status: str) -> None:
+    """Print what is known about a file whose process died without reporting."""
+    print(f"       process {exit_status}, and printed no pytest summary")
+    tail = [line for line in stderr.strip().split("\n") if line.strip()][-_CRASH_STDERR_LINES:]
+    if not tail:
+        print("       it wrote nothing to stderr")
+        return
+    print("       last lines of its stderr:")
+    for line in tail:
+        print(f"       {line}")
+
+
+def _print_failure_summary(output: str, stderr: str = "", exit_status: str = "") -> None:
     """Print the pytest failure summary from subprocess output.
 
     Extracts the 'FAILURES' section and 'short test summary' rather than
     dumping everything (which can be 1000+ lines with -s / no-capture).
+
+    ``exit_status`` is passed only for a crashed file, where pytest printed
+    neither section. The tail of the output is no use there: the suite runs
+    uncaptured, so the last lines belong to whichever test printed most
+    recently and say nothing about the crash. The exit status and the
+    process's own stderr do.
     """
     lines = output.strip().split("\n")
     extracted = _extract_failure_sections(lines)
     if not extracted:
+        if exit_status:
+            _print_crash_detail(stderr, exit_status)
+            return
         for line in lines[-30:]:
             if line.strip():
                 print(f"       {line}")
@@ -490,7 +619,7 @@ def _format_counts(counts: dict[str, int]) -> str:
     return ", ".join(f"{value} {outcome}" for outcome, value in sorted(counts.items()))
 
 
-def _report_file_result(label: str, code: int, duration: float, output: str) -> str:
+def _report_file_result(label: str, code: int, duration: float, output: str, stderr: str = "") -> str:
     """Report a single file result. Returns the ``OUTCOME_*`` classification."""
     outcome = classify_file_outcome(code, output)
     if outcome in (OUTCOME_PASSED, OUTCOME_NO_TESTS):
@@ -501,6 +630,14 @@ def _report_file_result(label: str, code: int, duration: float, output: str) -> 
         detail = _format_counts(counts)
         prefix = "PASS" if outcome == OUTCOME_PASSED else "NO TESTS"
         print(f"  {prefix} {label} ({duration:.1f}s) {detail}")
+        return outcome
+    if outcome == OUTCOME_CRASHED:
+        # No counts to print: pytest never got as far as a terminal summary.
+        # The exit status takes their place, so the shard log says why the file
+        # is red without anyone having to reproduce it locally.
+        exit_status = _format_exit_status(code)
+        print(f"  CRASH {label} ({duration:.1f}s) {exit_status}")
+        _print_failure_summary(output, stderr=stderr, exit_status=exit_status)
         return outcome
     if code == 0:
         # Exit 0 with no pytest terminal summary: the subprocess stopped being
@@ -544,7 +681,7 @@ def run_sequential(
     for i, path in enumerate(files, 1):
         label = f"[{i}/{len(files)}] {durations_key(path)}"
         try:
-            _fpath, code, duration, output = run_file(path, extra_args, coverage=coverage)
+            _fpath, code, duration, output, stderr = run_file(path, extra_args, coverage=coverage)
         except subprocess.TimeoutExpired as exc:
             print(f"  TIMEOUT {label} (>{exc.timeout:g}s)")
             failed += 1
@@ -555,12 +692,12 @@ def run_sequential(
         retry = retry_on_thread_exhaustion(path, extra_args, code, output, coverage=coverage)
         if retry is not None:
             print(f"  RETRIED (thread exhaustion) {label}")
-            code, duration, output = retry
+            code, duration, output, stderr = retry
 
         total_duration += duration
         if recorded_durations is not None:
             recorded_durations[durations_key(path)] = duration
-        outcome = _report_file_result(label, code, duration, output)
+        outcome = _report_file_result(label, code, duration, output, stderr)
         if outcome == OUTCOME_PASSED:
             passed += 1
         elif outcome == OUTCOME_NO_TESTS:
@@ -597,90 +734,101 @@ def run_parallel(
 
     print(f"  Workers: {workers}")
 
-    normal_files, heavy_files = split_memory_heavy(files)
-    total = len(files)
+    # One temporary root per worker, all under a single run-unique parent so
+    # the whole run is torn down by one rmtree below (issue #5777).
+    temp_parent = create_run_temp_parent()
+    try:
+        normal_files, heavy_files = split_memory_heavy(files)
+        total = len(files)
 
-    # Run normal files in parallel
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(run_file, f, extra_args, coverage): f for f in normal_files}
-        for future in as_completed(futures):
-            if abort:
-                future.cancel()
-                continue
-            try:
-                fpath, code, duration, output = future.result(timeout=360)
-            except Exception as exc:
-                fpath = futures[future]
+        # Run normal files in parallel
+        counter = multiprocessing.Value("i", 0)
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_bind_worker_temp_root,
+            initargs=(str(temp_parent), counter),
+        ) as pool:
+            futures = {pool.submit(run_file, f, extra_args, coverage): f for f in normal_files}
+            for future in as_completed(futures):
+                if abort:
+                    future.cancel()
+                    continue
+                try:
+                    fpath, code, duration, output, stderr = future.result(timeout=360)
+                except Exception as exc:
+                    fpath = futures[future]
+                    done += 1
+                    print(f"  ERROR [{done}/{total}] {durations_key(fpath)}: {exc}")
+                    failed += 1
+                    if fail_fast:
+                        abort = True
+                        for f in futures:
+                            f.cancel()
+                    continue
+
+                retry = retry_on_thread_exhaustion(fpath, extra_args, code, output, coverage=coverage)
+                if retry is not None:
+                    print(f"  RETRIED (thread exhaustion) {durations_key(fpath)}")
+                    code, duration, output, stderr = retry
+
                 done += 1
-                print(f"  ERROR [{done}/{total}] {durations_key(fpath)}: {exc}")
-                failed += 1
-                if fail_fast:
-                    abort = True
-                    for f in futures:
-                        f.cancel()
-                continue
+                label = f"[{done}/{total}] {durations_key(fpath)}"
+                if recorded_durations is not None:
+                    recorded_durations[durations_key(fpath)] = duration
+                outcome = _report_file_result(label, code, duration, output, stderr)
+                if outcome == OUTCOME_PASSED:
+                    passed += 1
+                elif outcome == OUTCOME_NO_TESTS:
+                    no_tests.append(fpath)
+                else:
+                    failed += 1
+                    if fail_fast:
+                        abort = True
+                        for f in futures:
+                            f.cancel()
 
-            retry = retry_on_thread_exhaustion(fpath, extra_args, code, output, coverage=coverage)
-            if retry is not None:
-                print(f"  RETRIED (thread exhaustion) {durations_key(fpath)}")
-                code, duration, output = retry
+        # Run memory-heavy files sequentially to avoid OOM
+        if heavy_files:
+            print("  Running memory-heavy files sequentially...")
+            for f in heavy_files:
+                if abort:
+                    break
+                try:
+                    fpath, code, duration, output, stderr = run_file(f, extra_args, coverage)
+                except Exception as exc:
+                    done += 1
+                    print(f"  ERROR [{done}/{total}] {durations_key(f)}: {exc}")
+                    failed += 1
+                    if fail_fast:
+                        abort = True
+                    continue
 
-            done += 1
-            label = f"[{done}/{total}] {durations_key(fpath)}"
-            if recorded_durations is not None:
-                recorded_durations[durations_key(fpath)] = duration
-            outcome = _report_file_result(label, code, duration, output)
-            if outcome == OUTCOME_PASSED:
-                passed += 1
-            elif outcome == OUTCOME_NO_TESTS:
-                no_tests.append(fpath)
-            else:
-                failed += 1
-                if fail_fast:
-                    abort = True
-                    for f in futures:
-                        f.cancel()
+                retry = retry_on_thread_exhaustion(fpath, extra_args, code, output, coverage=coverage)
+                if retry is not None:
+                    print(f"  RETRIED (thread exhaustion) {durations_key(fpath)}")
+                    code, duration, output, stderr = retry
 
-    # Run memory-heavy files sequentially to avoid OOM
-    if heavy_files:
-        print("  Running memory-heavy files sequentially...")
-        for f in heavy_files:
-            if abort:
-                break
-            try:
-                fpath, code, duration, output = run_file(f, extra_args, coverage)
-            except Exception as exc:
                 done += 1
-                print(f"  ERROR [{done}/{total}] {durations_key(f)}: {exc}")
-                failed += 1
-                if fail_fast:
-                    abort = True
-                continue
+                label = f"[{done}/{total}] {durations_key(f)}"
+                if recorded_durations is not None:
+                    recorded_durations[durations_key(fpath)] = duration
+                outcome = _report_file_result(label, code, duration, output, stderr)
+                if outcome == OUTCOME_PASSED:
+                    passed += 1
+                elif outcome == OUTCOME_NO_TESTS:
+                    no_tests.append(fpath)
+                else:
+                    failed += 1
+                    if fail_fast:
+                        abort = True
 
-            retry = retry_on_thread_exhaustion(fpath, extra_args, code, output, coverage=coverage)
-            if retry is not None:
-                print(f"  RETRIED (thread exhaustion) {durations_key(fpath)}")
-                code, duration, output = retry
-
-            done += 1
-            label = f"[{done}/{total}] {durations_key(f)}"
-            if recorded_durations is not None:
-                recorded_durations[durations_key(fpath)] = duration
-            outcome = _report_file_result(label, code, duration, output)
-            if outcome == OUTCOME_PASSED:
-                passed += 1
-            elif outcome == OUTCOME_NO_TESTS:
-                no_tests.append(fpath)
-            else:
-                failed += 1
-                if fail_fast:
-                    abort = True
-
-    wall_time = time.monotonic() - wall_start
-    print(f"\n{'=' * 60}")
-    _print_totals(passed, failed, no_tests, total)
-    print(f"Wall:  {wall_time:.1f}s ({workers} workers)")
-    return 1 if failed else 0
+        wall_time = time.monotonic() - wall_start
+        print(f"\n{'=' * 60}")
+        _print_totals(passed, failed, no_tests, total)
+        print(f"Wall:  {wall_time:.1f}s ({workers} workers)")
+        return 1 if failed else 0
+    finally:
+        remove_run_temp_parent(temp_parent)
 
 
 def _describe_rev(rev: str) -> str:
