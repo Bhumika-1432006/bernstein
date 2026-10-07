@@ -50,7 +50,7 @@ def test_the_reported_instruction_is_gone() -> None:
     assert "Project conventions (Bernstein)" not in prompt
 
 
-def test_the_prompt_tells_the_agent_to_use_the_repositorys_own_tools() -> None:
+def test_the_prompt_tells_the_agent_to_use_the_repository_own_tools() -> None:
     prompt = _system_prompt()
 
     assert "Use the tools this repository uses" in prompt
