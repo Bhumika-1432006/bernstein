@@ -629,6 +629,8 @@ Note what that means for containment. Bernstein gives each task its own worktree
 
 **Best for:** Scripted pipelines that want a small, low-ceremony CLI wrapper.
 
+**Isolation:** workers start with `pi -ne` (`--no-extensions`), so they do not connect to the MCP servers (or load the other extensions) in your own Pi configuration. Pi's MCP support is a built-in extension; without the flag, every concurrent worker launched a private copy of each of your global servers and carried their tools in its context. Needs a Pi that knows `-ne`; an older build reports an unknown option and exits.
+
 ---
 
 ### mistral (Mistral Vibe)

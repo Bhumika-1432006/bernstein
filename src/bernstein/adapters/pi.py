@@ -13,6 +13,17 @@ if TYPE_CHECKING:
 from bernstein.adapters.base import DEFAULT_TIMEOUT_SECONDS, CLIAdapter, SpawnResult, build_worker_cmd
 from bernstein.adapters.env_isolation import build_filtered_env
 
+#: Pi flags that keep a spawned worker off the operator's own Pi setup.
+#:
+#: ``-ne`` (``--no-extensions``) disables discovered, configured and built-in
+#: extensions. Pi's MCP support is a built-in extension, so without this every
+#: worker connects to every server in the operator's global Pi configuration:
+#: dozens of private background MCP processes across concurrent runs, and their
+#: tools in the worker's context that the task never asked for (#5965).
+#: ``-ne`` is the short form of ``--no-extensions`` in Pi's CLI reference; a Pi
+#: too old to know it reports an unknown option and exits.
+_ISOLATION_FLAGS: tuple[str, ...] = ("-ne",)
+
 
 class PiAdapter(CLIAdapter):
     """Spawn and monitor Pi (``pi-coding-agent``) CLI sessions.
@@ -22,6 +33,9 @@ class PiAdapter(CLIAdapter):
     as a positional argument; ``-c`` exists for resume but is not used
     when spawning a fresh session.  See
     https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent.
+
+    Workers are spawned with extension discovery off (``-ne``), so they do
+    not inherit the operator's global MCP servers or other extensions.
     """
 
     def spawn(
@@ -46,7 +60,9 @@ class PiAdapter(CLIAdapter):
             model_config: Model and effort configuration. The selected model
                 is passed through to Pi when it is not ``auto``.
             session_id: Unique session identifier used for the log file.
-            mcp_config: Unused. Pi manages its own integrations.
+            mcp_config: Unused. Pi manages its own integrations, and the worker
+                is started with extensions off so it does not pick up the
+                operator's global MCP servers.
             timeout_seconds: Watchdog timeout in seconds.
             task_scope: Unused scope hint.
             budget_multiplier: Unused budget multiplier.
@@ -63,7 +79,7 @@ class PiAdapter(CLIAdapter):
         log_path = workdir / ".sdd" / "runtime" / f"{session_id}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
-        cmd = ["pi"]
+        cmd = ["pi", *_ISOLATION_FLAGS]
         if model_config.model and model_config.model.lower() != "auto":
             cmd.extend(["--model", model_config.model])
         cmd.append(prompt)
