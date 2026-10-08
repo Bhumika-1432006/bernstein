@@ -205,6 +205,12 @@ def _print_report(report: dict[str, object], as_json: bool) -> None:
 
     deadline = str(summary.get("deadline", "N/A"))
     click.echo(f"\n  Deadline: {deadline}")
+    # Packages written before the date table existed carry no source line.
+    as_of = summary.get("application_dates_as_of")
+    if as_of and summary.get("application_dates"):
+        click.echo(
+            f"  Dates as of {as_of}, from the Official Journal text of {summary.get('application_dates_source')}."
+        )
     click.echo("─" * 60)
 
 

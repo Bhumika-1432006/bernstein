@@ -22,6 +22,16 @@ The Article 12 bundle is the smallest viable artefact that satisfies
 those requirements. Source:
 `src/bernstein/core/security/article12_bundle.py`.
 
+Article 12 sits in Chapter III, Section 2, so it applies to a high-risk
+system from the date set for that system's category: **2 December 2027** for
+Annex III (stand-alone) systems and **2 August 2028** for Annex I
+(product-embedded) systems (Regulation (EU) 2024/1689, Article 113, third
+paragraph, point (c), as replaced by Regulation (EU) 2026/1744, Article
+1(40)(b); `OJ L, 2026/1744, 24.7.2026`). As of 2026-10-08. Article 111(2) is
+not the date: it only governs systems placed on the market before it. The
+dates are kept in `src/bernstein/compliance/ai_act_dates.py`; see
+[Application dates](../operations/compliance.md#application-dates).
+
 ## What the bundle contains
 
 The bundle is a single deterministic zip with four entries. Same input

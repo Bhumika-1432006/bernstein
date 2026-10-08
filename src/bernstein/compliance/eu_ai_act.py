@@ -1,7 +1,8 @@
 """EU AI Act Compliance Engine - Annex III risk classification, Annex IV tech docs, conformity assessment.
 
 Implements the EU Artificial Intelligence Act (Regulation (EU) 2024/1689).
-Mandatory for high-risk AI systems from August 2027 (Article 111(2)).
+The application dates the engine reports come from ``ai_act_dates.py``, which
+is the only place a date is written.
 
 Key Articles implemented:
   - Article 5: Prohibited practices (unacceptable risk)
@@ -22,6 +23,13 @@ from enum import StrEnum
 from pathlib import Path  # noqa: TC003
 from typing import Any
 
+from bernstein.compliance.ai_act_dates import (
+    AMENDING_ACT,
+    DATES_AS_OF,
+    AiActDate,
+    Obligation,
+    applicable_dates,
+)
 from bernstein.system_description import (
     DEPLOYMENT_CONTEXT,
     INTENDED_USE,
@@ -89,6 +97,11 @@ class SystemDescriptor:
         used_in_law_enforcement: Policing, crime prediction, evidence evaluation.
         used_in_migration: Visa decisions, border control, asylum.
         used_in_justice: Judicial decisions, democratic processes.
+        annex_i_product_component: Article 6(1) - the system is a safety
+            component of, or is itself, a product covered by the Union
+            harmonisation legislation in Annex I and needs a third-party
+            conformity assessment. Stand-alone Annex III systems leave this
+            unset; it changes which application date the report prints.
         real_time_biometric_public: Real-time remote biometric ID in public spaces.
         subliminal_techniques: Exploits subconscious/subliminal techniques.
         exploits_vulnerabilities: Targets protected-characteristic vulnerabilities.
@@ -112,6 +125,9 @@ class SystemDescriptor:
     used_in_law_enforcement: bool = False
     used_in_migration: bool = False
     used_in_justice: bool = False
+
+    # Article 6(1) / Annex I: high-risk because the system is part of a regulated product
+    annex_i_product_component: bool = False
 
     # Article 5 (unacceptable risk) indicators
     real_time_biometric_public: bool = False
@@ -146,6 +162,8 @@ class ClassificationResult:
         justification: Narrative explanation of the classification.
         classified_at: ISO-8601 timestamp of classification.
         classification_hash: Deterministic SHA-256 of inputs (for audit).
+        annex_i_product: True when the system is high-risk under Article 6(1)
+            and Annex I (a regulated product or its safety component).
     """
 
     system_name: str
@@ -156,6 +174,48 @@ class ClassificationResult:
     justification: str
     classified_at: str
     classification_hash: str
+    annex_i_product: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Application dates
+# ---------------------------------------------------------------------------
+
+
+def dates_for_classification(c: ClassificationResult) -> list[AiActDate]:
+    """Application dates that apply to a classified system, earliest first.
+
+    The dates themselves live in :mod:`bernstein.compliance.ai_act_dates`; this
+    only decides which rows a given classification selects. A prohibited system
+    has no date: Article 5 stops it being deployed at all.
+    """
+    if c.risk_category == RiskCategory.UNACCEPTABLE:
+        return []
+    high = c.risk_category == RiskCategory.HIGH
+    return applicable_dates(
+        annex_iii_high_risk=high and c.annex_iii_domain != AnnexIIIDomain.NOT_APPLICABLE,
+        annex_i_high_risk=high and c.annex_i_product,
+        article_50=bool(c.article50_triggers),
+        synthetic_content=any(t.startswith("Article 50(2)") for t in c.article50_triggers),
+    )
+
+
+def _dates_section(c: ClassificationResult) -> str:
+    rows = dates_for_classification(c)
+    if not rows:
+        return "APPLICATION DATES: none apply to this classification."
+    lines = "\n".join(f"  - {r.describe()}" for r in rows)
+    return (
+        f"APPLICATION DATES (as of {DATES_AS_OF.isoformat()}, from the Official Journal text of "
+        f"{AMENDING_ACT}):\n{lines}"
+    )
+
+
+def headline_date(c: ClassificationResult) -> AiActDate | None:
+    """The date to lead with: the earliest high-risk date, else the earliest Article 50 date."""
+    rows = dates_for_classification(c)
+    high_risk = [r for r in rows if r.obligation in (Obligation.ANNEX_III_HIGH_RISK, Obligation.ANNEX_I_HIGH_RISK)]
+    return (high_risk or rows or [None])[0]
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +450,9 @@ class _AnnexIIIClassifier:
                 annex_iii_justification = justification
                 break  # First match determines domain (most critical first)
 
+        # Article 6(1) / Annex I is a second route to high-risk, with its own application date.
+        annex_i_product = bool(getattr(descriptor, "annex_i_product_component", False))
+
         # Step 3: Check Article 50 transparency obligations
         article50_triggers = [
             description for attr, description in self._ARTICLE50_CHECKS if getattr(descriptor, attr, False)
@@ -403,11 +466,18 @@ class _AnnexIIIClassifier:
                 f"Triggers: {'; '.join(article5_triggers)}. "
                 "Deployment is not permitted under the EU AI Act."
             )
-        elif annex_iii_domain != AnnexIIIDomain.NOT_APPLICABLE:
+        elif annex_iii_domain != AnnexIIIDomain.NOT_APPLICABLE or annex_i_product:
             risk_category = RiskCategory.HIGH
+            bases = []
+            if annex_iii_domain != AnnexIIIDomain.NOT_APPLICABLE:
+                bases.append(f"Annex III. {annex_iii_justification}")
+            if annex_i_product:
+                bases.append(
+                    "Article 6(1) and Annex I: a safety component of, or itself, a product "
+                    "covered by Union harmonisation legislation"
+                )
             justification = (
-                f"System '{descriptor.name}' is HIGH RISK under Annex III. "
-                f"{annex_iii_justification}. "
+                f"System '{descriptor.name}' is HIGH RISK under {'; and '.join(bases)}. "
                 "Full conformity assessment, technical documentation (Annex IV), "
                 "CE marking, and EU database registration required before deployment."
             )
@@ -427,6 +497,15 @@ class _AnnexIIIClassifier:
             )
 
         # Deterministic audit hash: SHA-256 of all classification inputs
+        flags: dict[str, bool] = {
+            attr: getattr(descriptor, attr, False)
+            for attr, *_ in (
+                self._ARTICLE5_CHECKS + [(a, d, j) for a, d, j in self._ANNEX_III_CHECKS] + self._ARTICLE50_CHECKS
+            )
+        }
+        if annex_i_product:
+            # Only hashed when set, so a hash recorded before this flag existed still matches.
+            flags["annex_i_product_component"] = True
         hash_payload = json.dumps(
             {
                 "name": descriptor.name,
@@ -434,14 +513,7 @@ class _AnnexIIIClassifier:
                 "description": descriptor.description,
                 "intended_use": descriptor.intended_use,
                 "deployment_context": descriptor.deployment_context,
-                "flags": {
-                    attr: getattr(descriptor, attr, False)
-                    for attr, *_ in (
-                        self._ARTICLE5_CHECKS
-                        + [(a, d, j) for a, d, j in self._ANNEX_III_CHECKS]
-                        + self._ARTICLE50_CHECKS
-                    )
-                },
+                "flags": flags,
             },
             sort_keys=True,
         ).encode()
@@ -456,6 +528,7 @@ class _AnnexIIIClassifier:
             justification=justification,
             classified_at=now,
             classification_hash=classification_hash,
+            annex_i_product=annex_i_product,
         )
 
 
@@ -639,7 +712,7 @@ class TechDocGenerator:
             f"CE Marking: {d.metadata.get('ce_marking_status', 'PENDING')}\n"
             f"EU Database Registration: {d.metadata.get('eu_db_registration', 'PENDING - required before deployment (Article 49)')}\n"
             f"Declaration of Conformity: {d.metadata.get('declaration_of_conformity', 'NOT YET ISSUED')}\n"
-            "DEADLINE: August 2027 (Article 111(2) transitional provision for high-risk AI systems)."
+            f"{_dates_section(c)}"
         )
 
 
@@ -1009,12 +1082,15 @@ class ComplianceEngine:
         c: ClassificationResult,
         r: ConformityResult,
     ) -> dict[str, Any]:
-        deadline = "August 2027 (Article 111(2))" if c.risk_category == RiskCategory.HIGH else "N/A"
+        lead = headline_date(c)
         return {
             "risk_category": c.risk_category.value,
             "overall_conformity": r.overall_status,
             "mandatory_gaps_count": r.failed,
-            "deadline": deadline,
+            "deadline": lead.describe() if lead else "N/A",
+            "application_dates": [row.to_dict() for row in dates_for_classification(c)],
+            "application_dates_as_of": DATES_AS_OF.isoformat(),
+            "application_dates_source": AMENDING_ACT,
             "action_required": r.failed > 0 or c.risk_category == RiskCategory.UNACCEPTABLE,
             "next_steps": self._next_steps(c, r),
         }
@@ -1040,13 +1116,14 @@ class ComplianceEngine:
                 "Register system in EU AI Act database (Article 49) before deployment.",
                 "Obtain CE marking after successful conformity assessment.",
                 "Establish post-market monitoring system (Article 72).",
-                "Deadline: August 2027 (Article 111(2)).",
             ]
+            steps += [f"Applies from {row.describe()}." for row in dates_for_classification(c)]
             return steps
         if c.risk_category == RiskCategory.LIMITED:
             return [
                 "Implement transparency/disclosure obligations per Article 50.",
                 "No conformity assessment or CE marking required.",
+                *[f"Applies from {row.describe()}." for row in dates_for_classification(c)],
             ]
         return ["No mandatory action required. Consider voluntary code of conduct adherence."]
 

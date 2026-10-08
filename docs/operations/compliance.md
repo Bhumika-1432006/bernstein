@@ -109,7 +109,8 @@ conformity assessment, and writes the evidence package to
 
 The printed summary includes risk category, Annex III domain, conformity
 status (pass/fail/partial), justification, mandatory gaps, and the
-August 2027 compliance deadline (`compliance_cmd.py:141-182`).
+application date for the system's own category, with the provision that sets
+it (see [Application dates](#application-dates)).
 
 ### `report` - pretty-print an existing evidence package
 
@@ -242,8 +243,9 @@ What `bernstein compliance assess` writes:
     plain-language justification.
   - `report.conformity` - overall status, per-control pass/fail/partial
     counts, mandatory gaps.
-  - `report.compliance_summary` - next-step list and the August 2027
-    deadline (`Article 111(2)`).
+  - `report.compliance_summary` - next-step list, the headline `deadline`,
+    the full `application_dates` list (ISO date, provision and quoted
+    wording per row) and the `application_dates_as_of` day it was checked.
   - `tech_doc` - the Annex IV technical document (system description,
     intended use, data sets, risk-management measures, post-market
     monitoring).
@@ -253,7 +255,7 @@ obligations only) under `bernstein_descriptor()`. Override the
 descriptor in code if your deployment falls into one of the Annex III
 domains - for example, an HR-screening use case (Annex III §4) shifts
 the classification to `high`, and the conformity assessment becomes
-mandatory before the August 2027 deadline.
+mandatory from the Annex III application date below.
 
 What is *audited*: the conformity assessment runs against the same
 runtime snapshot consumed by `compliance check`. A policy gap (failing
@@ -265,6 +267,49 @@ operator inputs; an auditor must read them and decide whether they are
 accurate.
 
 ---
+
+
+## Application dates
+
+Dates as of 2026-10-08, read from the Official Journal text of
+[Regulation (EU) 2026/1744](https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:L_202601744)
+(`OJ L, 2026/1744, 24.7.2026`, the "Digital Omnibus on AI"), which amends
+Regulation (EU) 2024/1689 (`OJ L, 2024/1689, 12.7.2024`). They are written in
+one file, `src/bernstein/compliance/ai_act_dates.py`; each row there quotes the
+operative words of the provision next to the date.
+
+| Obligation | Applies from | Provision |
+|---|---|---|
+| Article 50 transparency obligations | 2 August 2026 | Article 113, second paragraph (not amended) |
+| Article 50(2) marking, generative systems already on the market | 2 December 2026 | Article 111(4), added by Regulation (EU) 2026/1744 |
+| High-risk, Annex III (stand-alone) systems | 2 December 2027 | Article 113, third paragraph, point (c)(i), as replaced |
+| High-risk, Annex I (product-embedded) systems | 2 August 2028 | Article 113, third paragraph, point (c)(ii), as replaced |
+| General-purpose AI model obligations | 2 August 2025 | Article 113, third paragraph, point (b) (not amended) |
+| General-purpose AI models already on the market before 2 August 2025 | 2 August 2027 | Article 111(3) (not amended) |
+
+Three things the report used to blur:
+
+- **Article 111(2) is not an application date.** It says a high-risk system
+  placed on the market before the application date is only caught if it later
+  undergoes a significant design change, and that high-risk systems intended
+  for public authorities must comply by 2 August 2030 in any case. The
+  application dates are the ones in Article 113.
+- **Annex III and Annex I systems have different dates.** The report picks the
+  row from the classification. Set `annex_i_product_component=True` on the
+  `SystemDescriptor` when the system is a safety component of, or is itself, a
+  product covered by Annex I legislation (Article 6(1)); an Annex III domain
+  flag selects the Annex III row. When both apply, the earlier date leads and
+  both appear under `application_dates`.
+- **Article 50 was not postponed.** The report lists the Article 50 date for
+  any system with a transparency trigger, whatever its risk category. A system
+  that generates synthetic content also gets the Article 111(4) row.
+
+A prohibited system (Article 5) has no application date: it cannot be
+deployed.
+
+The table is a convenience, not legal advice. When the Official Journal changes
+a date, update the row and `DATES_AS_OF` in `ai_act_dates.py` together; the
+tests pin every row to its quoted text, so a date edited on its own fails.
 
 ## HIPAA / PHI handling
 
