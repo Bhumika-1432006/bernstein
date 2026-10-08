@@ -92,6 +92,20 @@ def _resolve_adapter(suite_obj: BenchSuite) -> ReplayAdapter:
     return MockReplayAdapter()
 
 
+def _load_trusted_keys(entries: tuple[str, ...]) -> dict[str, bytes]:
+    """Parse repeated ``--trusted-key FINGERPRINT=PATH`` options into fingerprint -> PEM bytes."""
+    keys: dict[str, bytes] = {}
+    for entry in entries:
+        fingerprint, sep, key_path = entry.partition("=")
+        if not sep or not fingerprint or not key_path:
+            raise click.ClickException(f"--trusted-key expects FINGERPRINT=PATH, got {entry!r}")
+        pem = Path(key_path)
+        if not pem.exists():
+            raise click.ClickException(f"Trusted key file not found: {pem}")
+        keys[fingerprint] = pem.read_bytes()
+    return keys
+
+
 def _is_synthetic(adapter: object) -> bool:
     """Whether *adapter* reports verdicts that no run produced."""
     return bool(getattr(adapter, "synthetic", False))
@@ -290,6 +304,16 @@ def bench_group() -> None:
     default="",
     help="Commit SHA to attach check run to.",
 )
+@click.option(
+    "--trusted-key",
+    "trusted_keys",
+    multiple=True,
+    metavar="FINGERPRINT=PATH",
+    help=(
+        "A signer fingerprint and the SPKI PEM file that verifies it, used to check an "
+        "install-identity signature on the --baseline bundle. Repeatable."
+    ),
+)
 def bench_run(
     suite: str,
     out: str,
@@ -308,6 +332,7 @@ def bench_run(
     regression_threshold: float = 0.0,
     repo: str = "",
     head_sha: str = "",
+    trusted_keys: tuple[str, ...] = (),
 ) -> None:
     """Execute a suite and emit a signed submission bundle.
 
@@ -459,7 +484,12 @@ def bench_run(
                     f"({type(exc).__name__}: {exc}). Result is neutral."
                 )
 
-        verifier = BenchVerifier(suite=suite_obj, adapter=adapter, allow_stub_signature=stub_signer)
+        verifier = BenchVerifier(
+            suite=suite_obj,
+            adapter=adapter,
+            trusted_keys=_load_trusted_keys(trusted_keys),
+            allow_stub_signature=stub_signer,
+        )
         scorecard = evaluate_ci_scorecard(
             bundle=bundle,
             suite=suite_obj,
@@ -572,15 +602,7 @@ def bench_verify(
     suite_obj = _get_suite(suite)
 
     adapter = _resolve_adapter(suite_obj)
-    keys: dict[str, bytes] = {}
-    for entry in trusted_keys:
-        fingerprint, sep, key_path = entry.partition("=")
-        if not sep or not fingerprint or not key_path:
-            raise click.ClickException(f"--trusted-key expects FINGERPRINT=PATH, got {entry!r}")
-        pem = Path(key_path)
-        if not pem.exists():
-            raise click.ClickException(f"Trusted key file not found: {pem}")
-        keys[fingerprint] = pem.read_bytes()
+    keys = _load_trusted_keys(trusted_keys)
 
     verifier = BenchVerifier(
         suite=suite_obj,

@@ -23,7 +23,7 @@ from bernstein.eval.bench.ci import evaluate_ci_scorecard, post_bench_check_run
 from bernstein.eval.bench.golden_suite import build_golden_suite_v1
 from bernstein.eval.bench.runner import BenchRunner, MockReplayAdapter
 from bernstein.eval.bench.sarif import bundle_to_sarif
-from bernstein.eval.bench.signer import StubSigner
+from bernstein.eval.bench.signer import AgentCardSigner, StubSigner
 from bernstein.eval.bench.suite import BenchSuite, BenchTask
 from bernstein.eval.bench.verifier import BenchVerifier
 from bernstein.github_app.check_runs import CheckRunClient
@@ -292,8 +292,8 @@ class TestScorecardEvaluation:
         assert scorecard.conclusion == "neutral"
         assert "No verifier" in scorecard.summary
 
-    def test_an_install_identity_signature_is_neutral_not_verified(self) -> None:
-        """Nothing in the bench layer can verify one yet (#5856); a delta against
+    def test_an_install_identity_signature_with_no_trusted_key_is_neutral(self) -> None:
+        """A signer nobody has said to trust is not a trusted signer; a delta against
         an unverifiable baseline must not read as success."""
         import dataclasses
 
@@ -305,8 +305,127 @@ class TestScorecardEvaluation:
             bundle=base, suite=suite, baseline_bundle=signed, verifier=BenchVerifier(suite=suite, adapter=adapter)
         )
         assert scorecard.conclusion == "neutral"
-        assert "cannot be verified" in scorecard.summary
-        assert "#5856" in scorecard.summary
+        assert "was not verified" in scorecard.summary
+        assert "does not resolve to a trusted public key" in scorecard.summary
+
+
+def _install_keypair() -> tuple[bytes, bytes]:
+    """An Ed25519 keypair in the PEM shapes the install identity uses."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    private = ed25519.Ed25519PrivateKey.generate()
+    private_pem = private.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_pem = private.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return private_pem, public_pem
+
+
+class TestInstallIdentityBaseline:
+    """An install-identity signature on the baseline is verified, not just noticed (#5902)."""
+
+    def test_a_baseline_signed_by_a_trusted_key_is_compared(self) -> None:
+        suite = build_golden_suite_v1()
+        adapter = MockReplayAdapter()
+        private_pem, public_pem = _install_keypair()
+        baseline = AgentCardSigner(private_pem, public_pem).sign(
+            BenchRunner(suite=suite, adapter=adapter, scheduler_config={}).run()
+        )
+        # The keys are given to the verifier only; the scorecard takes them from it.
+        verifier = BenchVerifier(suite=suite, adapter=adapter, trusted_keys={baseline.signer_fingerprint: public_pem})
+
+        scorecard = evaluate_ci_scorecard(
+            bundle=BenchRunner(suite=suite, adapter=adapter, scheduler_config={}).run(),
+            suite=suite,
+            baseline_bundle=baseline,
+            verifier=verifier,
+        )
+
+        assert scorecard.conclusion == "success"
+        assert scorecard.pass_rate_delta == pytest.approx(0.0)
+
+    def test_the_trusted_keys_argument_is_enough_for_the_signature_check(self) -> None:
+        """Passing the keys to the scorecard verifies the signature without a keyed verifier.
+
+        The verifier here has its own signature check off, so what is exercised is the
+        scorecard's own check of the baseline.
+        """
+        suite = build_golden_suite_v1()
+        adapter = MockReplayAdapter()
+        private_pem, public_pem = _install_keypair()
+        baseline = AgentCardSigner(private_pem, public_pem).sign(
+            BenchRunner(suite=suite, adapter=adapter, scheduler_config={}).run()
+        )
+
+        scorecard = evaluate_ci_scorecard(
+            bundle=BenchRunner(suite=suite, adapter=adapter, scheduler_config={}).run(),
+            suite=suite,
+            baseline_bundle=baseline,
+            verifier=BenchVerifier(suite=suite, adapter=adapter, require_signature=False),
+            trusted_keys={baseline.signer_fingerprint: public_pem},
+        )
+
+        assert scorecard.conclusion == "success"
+
+    def test_a_signature_that_does_not_verify_against_its_trusted_key_is_neutral(self) -> None:
+        """The fingerprint resolves to a key, but the signature was made under another one."""
+        suite = build_golden_suite_v1()
+        adapter = MockReplayAdapter()
+        honest_private, honest_public = _install_keypair()
+        _attacker_private, attacker_public = _install_keypair()
+        baseline = AgentCardSigner(honest_private, honest_public).sign(
+            BenchRunner(suite=suite, adapter=adapter, scheduler_config={}).run()
+        )
+
+        scorecard = evaluate_ci_scorecard(
+            bundle=BenchRunner(suite=suite, adapter=adapter, scheduler_config={}).run(),
+            suite=suite,
+            baseline_bundle=baseline,
+            verifier=BenchVerifier(suite=suite, adapter=adapter, require_signature=False),
+            trusted_keys={baseline.signer_fingerprint: attacker_public},
+        )
+
+        assert scorecard.conclusion == "neutral"
+        assert "does not verify against the trusted public key" in scorecard.summary
+
+    def test_a_signature_lifted_onto_altered_contents_is_neutral(self) -> None:
+        """Re-hashing the contents after signing leaves a signature over the old hash."""
+        import dataclasses
+
+        suite = build_golden_suite_v1()
+        adapter = MockReplayAdapter()
+        private_pem, public_pem = _install_keypair()
+        honest = AgentCardSigner(private_pem, public_pem).sign(
+            BenchRunner(suite=suite, adapter=adapter, scheduler_config={}).run()
+        )
+        altered = dataclasses.replace(honest, scheduler_config={"altered": True})
+
+        scorecard = evaluate_ci_scorecard(
+            bundle=BenchRunner(suite=suite, adapter=adapter, scheduler_config={}).run(),
+            suite=suite,
+            baseline_bundle=altered,
+            verifier=BenchVerifier(suite=suite, adapter=adapter, require_signature=False),
+            trusted_keys={honest.signer_fingerprint: public_pem},
+        )
+
+        assert scorecard.conclusion == "neutral"
+        assert "was not verified" in scorecard.summary
+
+    def test_the_verifier_exposes_its_trusted_keys_as_a_copy(self) -> None:
+        suite = build_golden_suite_v1()
+        _private, public_pem = _install_keypair()
+        verifier = BenchVerifier(suite=suite, adapter=MockReplayAdapter(), trusted_keys={"fp": public_pem})
+
+        keys = dict(verifier.trusted_keys)
+        keys["other"] = b"x"
+
+        assert verifier.trusted_keys == {"fp": public_pem}
 
 
 class TestCheckRunPosting:
@@ -407,6 +526,84 @@ class TestCLI_CI_Integration:
         )
         assert second.exit_code == 0, second.output
         assert "PASS" in second.output
+
+    def _install_signed_baseline(self, tmp_path: Path) -> tuple[Path, str, Path]:
+        """Write a golden-v1 baseline signed under a fresh key; return it, its fingerprint and the public PEM."""
+        suite = build_golden_suite_v1()
+        private_pem, public_pem = _install_keypair()
+        baseline = AgentCardSigner(private_pem, public_pem).sign(
+            BenchRunner(suite=suite, adapter=MockReplayAdapter(), scheduler_config={}).run()
+        )
+        baseline_path = tmp_path / "base.json"
+        baseline.save(baseline_path)
+        public_path = tmp_path / "signer.pub.pem"
+        public_path.write_bytes(public_pem)
+        return baseline_path, baseline.signer_fingerprint, public_path
+
+    def test_cli_ci_verifies_an_install_signed_baseline_with_a_trusted_key(self, tmp_path: Path) -> None:
+        baseline_path, fingerprint, public_path = self._install_signed_baseline(tmp_path)
+
+        result = CliRunner().invoke(
+            bench_group,
+            [
+                "run",
+                "golden-v1",
+                "--out",
+                str(tmp_path / "b.json"),
+                "--stub-signer",
+                "--ci",
+                "--baseline",
+                str(baseline_path),
+                "--trusted-key",
+                f"{fingerprint}={public_path}",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "PASS" in result.output
+
+    def test_cli_ci_without_the_trusted_key_leaves_an_install_signed_baseline_neutral(self, tmp_path: Path) -> None:
+        baseline_path, _fingerprint, _public_path = self._install_signed_baseline(tmp_path)
+
+        result = CliRunner().invoke(
+            bench_group,
+            [
+                "run",
+                "golden-v1",
+                "--out",
+                str(tmp_path / "b.json"),
+                "--stub-signer",
+                "--ci",
+                "--baseline",
+                str(baseline_path),
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "NEUTRAL" in result.output
+        assert "does not resolve to a trusted public key" in result.output
+
+    def test_cli_a_malformed_trusted_key_is_an_error(self, tmp_path: Path) -> None:
+        baseline_path, _fingerprint, _public_path = self._install_signed_baseline(tmp_path)
+
+        result = CliRunner().invoke(
+            bench_group,
+            [
+                "run",
+                "golden-v1",
+                "--out",
+                str(tmp_path / "b.json"),
+                "--stub-signer",
+                "--ci",
+                "--baseline",
+                str(baseline_path),
+                "--trusted-key",
+                "no-equals-sign",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "--trusted-key expects FINGERPRINT=PATH" in result.output
 
     def test_the_sarif_location_is_derived_from_the_suite_name(self, tmp_path: Path) -> None:
         """Direct, because golden-v1 under the mock adapter fails no task and a

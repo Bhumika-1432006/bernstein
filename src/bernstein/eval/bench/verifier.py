@@ -215,6 +215,16 @@ class BenchVerifier:
         # Build a task-id → BenchTask index for O(1) lookup.
         self._task_index: dict[str, BenchTask] = {t.id: t for t in suite.tasks}
 
+    @property
+    def trusted_keys(self) -> Mapping[str, bytes]:
+        """The signer fingerprint -> SPKI PEM map this verifier resolves signatures against.
+
+        A copy, so a caller reading it cannot change what the verifier trusts. Callers that
+        verify a signature themselves (the CI scorecard checks a baseline's before replaying
+        it) take their keys from here, so one set of keys is configured once.
+        """
+        return dict(self._trusted_keys)
+
     def verify(self, bundle: SubmissionBundle) -> BundleVerificationResult:
         """
         Verify *bundle* and return a :class:`BundleVerificationResult`.

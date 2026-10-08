@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from bernstein.eval.bench.bundle import SubmissionBundle
     from bernstein.eval.bench.suite import BenchSuite
     from bernstein.eval.bench.verifier import BenchVerifier
@@ -67,25 +69,37 @@ class BenchScorecard:
         return "\n".join(lines)
 
 
-def _baseline_signature_problem(baseline_bundle: SubmissionBundle) -> str | None:
+def _baseline_signature_problem(
+    baseline_bundle: SubmissionBundle,
+    trusted_keys: Mapping[str, bytes] | None = None,
+) -> str | None:
     """Why *baseline_bundle* cannot count as a signed baseline, or ``None``.
 
     "Signed" is a precondition of #5458 ("the last signed bundle on the
-    default branch"), so an unsigned bundle is refused outright. What can be
-    checked beyond presence depends on the signer: a stub signature is
-    recomputed and compared, so a bundle re-hashed after stub-signing is
-    caught. An install-identity signature cannot be checked here -- nothing
-    in the bench layer verifies one yet (#5856) -- and the scorecard says so
-    rather than implying it was.
+    default branch"), so an unsigned bundle is refused outright. Beyond
+    presence the signature is actually checked, by whichever signer made it:
+    a stub signature is recomputed and compared, so a bundle re-hashed after
+    stub-signing is caught; an install-identity signature is verified against
+    the public key *trusted_keys* maps its fingerprint to, with the same
+    :func:`~bernstein.eval.bench.verifier.verify_signature` that ``bench
+    verify`` uses. A fingerprint with no trusted key, or a signature that does
+    not verify, is refused rather than assumed good (#5902).
     """
     from bernstein.eval.bench.signer import StubSigner
+    from bernstein.eval.bench.verifier import verify_signature
 
     if not baseline_bundle.signature or not baseline_bundle.signer_fingerprint:
         return "Baseline bundle is unsigned; only a signed baseline is compared against."
-    if baseline_bundle.signer_fingerprint == StubSigner.fingerprint() and not StubSigner.verify(baseline_bundle):
-        return (
-            "Baseline bundle's stub signature does not verify against its hash; the bundle was altered after signing."
-        )
+    if baseline_bundle.signer_fingerprint == StubSigner.fingerprint():
+        if not StubSigner.verify(baseline_bundle):
+            return (
+                "Baseline bundle's stub signature does not verify against its hash; "
+                "the bundle was altered after signing."
+            )
+        return None
+    problem = verify_signature(baseline_bundle, trusted_keys)
+    if problem:
+        return f"Baseline signature by {baseline_bundle.signer_fingerprint} was not verified: {problem}"
     return None
 
 
@@ -112,6 +126,7 @@ def evaluate_ci_scorecard(
     baseline_bundle: SubmissionBundle | None = None,
     verifier: BenchVerifier | None = None,
     regression_threshold: float = 0.0,
+    trusted_keys: Mapping[str, bytes] | None = None,
 ) -> BenchScorecard:
     """Evaluate *bundle* against *baseline_bundle* and compute a conclusion.
 
@@ -120,6 +135,12 @@ def evaluate_ci_scorecard(
     replayed verdicts). Everything short of that is ``neutral`` with the
     reason in ``summary`` -- never a green (#5458). A missing *verifier* is
     one of those shortfalls, not a way to skip the check.
+
+    An install-identity signature on the baseline is verified against
+    *trusted_keys*, a map of signer fingerprint to SPKI PEM. When it is not
+    given, the keys of *verifier* are used, so the keys are configured once.
+    With neither, only a stub signature can be checked and an install-identity
+    baseline is ``neutral``: an unknown signer is not a trusted one (#5902).
     """
     pass_rate = bundle.pass_rate
     score = bundle.overall_score
@@ -135,22 +156,10 @@ def evaluate_ci_scorecard(
             baseline_bundle,
         )
 
-    problem = _baseline_signature_problem(baseline_bundle)
+    keys = trusted_keys if trusted_keys is not None else (verifier.trusted_keys if verifier is not None else None)
+    problem = _baseline_signature_problem(baseline_bundle, keys)
     if problem is not None:
         return _neutral(bundle, problem, baseline_bundle)
-
-    from bernstein.eval.bench.signer import StubSigner
-
-    if baseline_bundle.signer_fingerprint != StubSigner.fingerprint():
-        # A non-stub fingerprint is present but nothing in the bench layer can
-        # verify it yet (#5856). A delta measured against an unverifiable
-        # baseline must not read as success.
-        return _neutral(
-            bundle,
-            f"Baseline signature by {baseline_bundle.signer_fingerprint} is present but cannot "
-            "be verified by bench (#5856); result is neutral.",
-            baseline_bundle,
-        )
 
     if verifier is None:
         return _neutral(

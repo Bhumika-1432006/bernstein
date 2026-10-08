@@ -281,19 +281,23 @@ summary, never a green:
 
 - no `--baseline` given;
 - the file loads but does not verify (tampered receipt, hash mismatch);
-- the bundle is unsigned, or a stub signature no longer matches its hash
-  (the bundle was altered after signing);
+- the bundle is unsigned, or its signature does not verify: a stub
+  signature no longer matches its hash (the bundle was altered after
+  signing), or an install-identity signature has no trusted key or does not
+  verify against the one given;
 - the bundle is from a different suite.
 
 A `--baseline` path that does not exist is a configuration error and the
 command refuses, rather than reporting neutral for a comparison it was
-asked to make. A non-stub signature is checked for **presence only** —
-nothing in the bench layer can verify one yet (#5856), and the check
-establishes that a signature is there, not who made it — and the summary
-says so for that baseline. The baseline must therefore come from a channel
-you trust (the default branch's own artefact, not an upload): the
-signature check catches alteration after signing, not fabrication, and the
-stub key is public. The current run's bundle is not re-verified — it was
+asked to make. An install-identity signature on the baseline is verified
+against the public key you supply with `--trusted-key FINGERPRINT=PATH`
+(repeatable, the same option `bench verify` takes); a baseline signed by a
+fingerprint with no trusted key, or whose signature does not verify, is
+**neutral** with the reason in the summary. The key is the trust anchor, so
+it has to reach the job by a channel you trust, not from the same artefact
+as the baseline: a stub signature is checked against its hash, but the stub
+key is public, so a stub-signed baseline only shows the bundle was not
+altered after signing. The current run's bundle is not re-verified — it was
 produced in-process a moment earlier; only the baseline is.
 
 With `--repo` and `--head-sha` the scorecard is also published as a
