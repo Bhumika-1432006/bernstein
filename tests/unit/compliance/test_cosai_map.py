@@ -24,6 +24,7 @@ Covers:
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import json
 import re
@@ -159,7 +160,7 @@ def test_every_cosai_control_is_counted_exactly_once() -> None:
     todo = statuses.count("todo")
     assert mapped + partial + todo == len(controls)
     assert mapped == 7
-    assert partial == 4
+    assert partial == 16
     assert todo == 2
 
 
@@ -255,7 +256,7 @@ def test_build_evidence_pack_wellformed(tmp_path: Path) -> None:
         pack.controls_mapped + pack.controls_partial + pack.controls_organisational + pack.controls_todo == n_controls
     )
     assert pack.controls_mapped == 7
-    assert pack.controls_partial == 4
+    assert pack.controls_partial == 16
     assert pack.controls_todo == 2
     assert out.is_file()
 
@@ -306,7 +307,12 @@ def test_cosai_mapping_page_and_map_stay_in_sync() -> None:
 
     text = doc_path.read_text(encoding="utf-8")
 
-    control_prefixes = ("human-governed-accountable.", "bounded-resilient.", "transparent-verifiable.")
+    control_prefixes = (
+        "human-governed-accountable.",
+        "bounded-resilient.",
+        "transparent-verifiable.",
+        "mcp-threats.",
+    )
     page_rows: dict[str, dict[str, Any]] = {}
     for line in text.splitlines():
         line = line.strip()
@@ -333,8 +339,8 @@ def test_cosai_mapping_page_and_map_stay_in_sync() -> None:
     )
 
     # Validate count summary sentence on the doc page
-    assert "7 `mapped`, 4 `partial`, 2 `todo` - 13 of 13 controls counted" in text, (
-        "Status count summary line in cosai-mapping.md does not match expected 7/4/2"
+    assert "7 `mapped`, 16 `partial`, 2 `todo` - 25 of 25 controls counted" in text, (
+        "Status count summary line in cosai-mapping.md does not match expected 7/16/2"
     )
 
     missing_paths: list[str] = []
@@ -390,3 +396,121 @@ def test_cosai_mapping_page_and_map_stay_in_sync() -> None:
 
     assert not missing_paths, f"cosai-mapping.md cites paths that do not exist: {missing_paths}"
     assert not unrelated_tests, f"cosai-mapping.md cites tests that do not reference module: {unrelated_tests}"
+
+
+# ---------------------------------------------------------------------------
+# MCP threat classes (#6217): the twelve classes of the CoSAI MCP security paper
+# ---------------------------------------------------------------------------
+
+#: The paper's own class titles, MCP-T1 to MCP-T12. A row quotes its class title, so a
+#: reworded title is a different claim about which class the row answers.
+_MCP_CLASS_TITLES: dict[int, str] = {
+    1: "Improper Authentication and Identity Management",
+    2: "Missing or Improper Access Control",
+    3: "Input Validation / Sanitization Failures",
+    4: "Input / Instruction Boundary Distinction Failure",
+    5: "Inadequate Data Protection and Confidentiality Controls",
+    6: "Missing Integrity / Verification Controls",
+    7: "Session and Transport Security Failures",
+    8: "Network Binding / Isolation Failures",
+    9: "Trust Boundary and Privilege Design Failures",
+    10: "Resource Management / Rate-Limiting Absence",
+    11: "Supply Chain and Lifecycle Security Failures",
+    12: "Insufficient Logging, Monitoring, and Auditability",
+}
+
+#: MCP chain events and the recorder that writes each. A row may cite one only while a
+#: non-test module outside ``audit_chain.py`` calls its recorder: an event type that
+#: exists but is never emitted is not evidence.
+_MCP_EVENT_RECORDERS: dict[str, str] = {
+    "mcp.stateless_call": "record_mcp_stateless_call",
+    "mcp.capability_drift": "record_mcp_capability_drift",
+    "mcp.task_handle": "record_mcp_task_handle",
+}
+
+
+def _mcp_rows() -> list[dict[str, Any]]:
+    return [c for c in get_standard_map("cosai")["controls"] if str(c["control_id"]).startswith("mcp-threats.")]
+
+
+@functools.cache
+def _production_callers(function_name: str) -> tuple[str, ...]:
+    """Files under ``src/bernstein`` (other than ``audit_chain.py``) that call *function_name*."""
+    src_root = Path(__file__).resolve().parents[3] / "src" / "bernstein"
+    callers: list[str] = []
+    for path in src_root.rglob("*.py"):
+        if path.name == "audit_chain.py":
+            continue
+        try:
+            tree = ast.parse(path.read_bytes(), filename=str(path))
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+            if name == function_name:
+                callers.append(path.relative_to(src_root).as_posix())
+                break
+    return tuple(callers)
+
+
+def test_mcp_paper_is_recorded_with_its_version_and_date() -> None:
+    """The paper may renumber, so the rows say which revision they follow."""
+    for key in ("title", "publisher", "version", "date", "status", "announced", "url"):
+        assert cosai.MCP_PAPER.get(key), key
+
+    page = (Path(__file__).resolve().parents[3] / "docs" / "compliance" / "cosai-mapping.md").read_text(
+        encoding="utf-8"
+    )
+    assert cosai.MCP_PAPER["version"] in page
+    assert cosai.MCP_PAPER["date"] in page
+
+
+def test_every_mcp_threat_class_has_exactly_one_row() -> None:
+    numbers = []
+    for row in _mcp_rows():
+        match = re.fullmatch(r"mcp-threats\.t(\d+)-[a-z-]+", str(row["control_id"]))
+        assert match, row["control_id"]
+        numbers.append(int(match.group(1)))
+    assert sorted(numbers) == list(range(1, 13)), numbers
+
+
+def test_each_mcp_row_quotes_the_papers_class_title() -> None:
+    for row in _mcp_rows():
+        number = int(re.search(r"\.t(\d+)-", str(row["control_id"])).group(1))  # type: ignore[union-attr]
+        expected = f"MCP-T{number} {_MCP_CLASS_TITLES[number]}:"
+        assert str(row["requirement"]).startswith(expected), (row["control_id"], expected)
+
+
+def test_no_mcp_row_claims_more_than_the_chain_records() -> None:
+    """A ``mapped`` row needs a chained event, and none of the twelve is ``mapped`` today.
+
+    The signing and scan verdicts, transport authentication decisions and refused inputs are
+    not written to the audit chain, so every class that rests on them is ``partial``. If a
+    row is promoted this test asks for the event that justifies it.
+    """
+    for row in _mcp_rows():
+        assert row["status"] in {"partial", "todo"}, row["control_id"]
+        if row["status"] == "mapped":
+            assert row["selector"] != "n/a", row["control_id"]
+
+
+def test_mcp_rows_cite_only_events_that_production_code_emits() -> None:
+    for row in _mcp_rows():
+        for token in str(row["selector"]).split(","):
+            recorder = _MCP_EVENT_RECORDERS.get(token.strip())
+            if recorder is None:
+                continue
+            assert _production_callers(recorder), (
+                f"{row['control_id']} cites {token}, but {recorder} has no production caller"
+            )
+
+
+def test_mcp_task_handle_is_not_cited_while_nothing_emits_it() -> None:
+    """``mcp.task_handle`` exists as an event type but ``record_mcp_task_handle`` is never called."""
+    cited = {t.strip() for row in _mcp_rows() for t in str(row["selector"]).split(",")}
+    if _production_callers("record_mcp_task_handle"):
+        return  # it is emitted now; a row may cite it
+    assert "mcp.task_handle" not in cited
