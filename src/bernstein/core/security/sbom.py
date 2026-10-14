@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # CycloneDX spec version emitted by this generator.
-_CYCLONEDX_SPEC_VERSION = "1.5"
+_CYCLONEDX_SPEC_VERSION = "1.6"
 _BERNSTEIN_TOOL_NAME = "bernstein"
 
 
