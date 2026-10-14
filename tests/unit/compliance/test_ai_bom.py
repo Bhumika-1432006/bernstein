@@ -612,6 +612,7 @@ class TestCycloneDXSnapshot:
         assert decoded["specVersion"] == "1.6"
         assert decoded["version"] == 1
         import re
+
         assert re.fullmatch(
             r"urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
             decoded["serialNumber"],
@@ -646,9 +647,7 @@ class TestCycloneDXSchemaValidation:
     def test_full_bom_validates_against_cyclonedx_1_6_schema(self) -> None:
         import jsonschema
 
-        schema_path = (
-            Path(__file__).parent.parent.parent / "fixtures" / "schemas" / "bom-1.6.schema.json"
-        )
+        schema_path = Path(__file__).parent.parent.parent / "fixtures" / "schemas" / "bom-1.6.schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         bom = generate_bom(_full_snapshot())
         doc = json.loads(encode_bom(bom, fmt="cyclonedx"))
@@ -657,9 +656,7 @@ class TestCycloneDXSchemaValidation:
     def test_minimal_bom_validates_against_cyclonedx_1_6_schema(self) -> None:
         import jsonschema
 
-        schema_path = (
-            Path(__file__).parent.parent.parent / "fixtures" / "schemas" / "bom-1.6.schema.json"
-        )
+        schema_path = Path(__file__).parent.parent.parent / "fixtures" / "schemas" / "bom-1.6.schema.json"
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         bom = generate_bom(_minimal_snapshot())
         doc = json.loads(encode_bom(bom, fmt="cyclonedx"))
