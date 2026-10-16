@@ -139,6 +139,7 @@ def _verify_ed25519_signature(public_key_pem: str, message: bytes, signature_b64
         import base64
 
         from cryptography.hazmat.primitives import serialization
+
         padding = 4 - (len(signature_b64url) % 4)
         if padding != 4:
             signature_b64url = signature_b64url + "=" * padding
@@ -244,9 +245,7 @@ class ReceiptGate:
 
         self._record_cap(receipt.install_id)
         logger.info("Proposal receipt-admitted: install=%s hash=%s", receipt.install_id, receipt_hash[:16])
-        return ReceiptAdmissionResult(
-            admitted=True, reason=RECEIPT_ADMISSION_REASON, install_id=receipt.install_id
-        )
+        return ReceiptAdmissionResult(admitted=True, reason=RECEIPT_ADMISSION_REASON, install_id=receipt.install_id)
 
     # ------------------------------------------------------------------
     # Internal helpers
