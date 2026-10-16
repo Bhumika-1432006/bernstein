@@ -249,10 +249,7 @@ class RepeatedCommandDetector:
         if count >= self._threshold:
             return TaskStallSignal(
                 task_id=task_id,
-                reason=(
-                    f"repeated command ({count}x): {command!r} exit {exit_code} "
-                    f"(threshold {self._threshold})"
-                ),
+                reason=(f"repeated command ({count}x): {command!r} exit {exit_code} (threshold {self._threshold})"),
                 detail={"command": command, "exit_code": exit_code, "count": count, "threshold": self._threshold},
             )
         return None
