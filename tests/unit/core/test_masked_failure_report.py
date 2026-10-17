@@ -6,9 +6,9 @@ from bernstein.core.persistence.masked_failure_report import (
     _NON_TERMINAL_KINDS,
     _TERMINAL_KINDS,
     AttemptRecord,
+    TaskAttemptMaskedFailureReport,
     count_masked_failures,
     scan_for_masked_failures,
-    TaskAttemptMaskedFailureReport,
 )
 from bernstein.core.persistence.work_ledger import (
     KIND_TASK_ABANDONED,
