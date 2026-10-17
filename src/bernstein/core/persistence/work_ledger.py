@@ -823,6 +823,7 @@ class LedgerReader:
             errors.append(f"head mismatch: expected {expected_head[:16]}..., got {prev_hash[:16]}...")
 
         return LedgerVerification(ok=not errors, head_hash=prev_hash, entries=entries, errors=errors)
+
     def __enter__(self) -> LedgerReader:
         """Enter the context manager.
 
@@ -834,7 +835,6 @@ class LedgerReader:
     def __exit__(self, *_exc: object) -> None:
         """Exit the context manager (no-op)."""
         pass
-
 
 
 # ---------------------------------------------------------------------------
