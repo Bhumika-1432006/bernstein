@@ -111,6 +111,18 @@ __all__ = [
 #: enables tail-truncation detection in :func:`verify_run_chain`.
 _HEAD_SUFFIX: Final[str] = ".head.json"
 
+
+def _head_sidecar_path(receipt_path: Path) -> Path:
+    """Return the chain-head sidecar path derived from the receipt path.
+
+    Both the writer (:meth:`DelegationLedger.record_chain_head`) and the
+    reader (:func:`verify_run_chain`) call this so they can never disagree
+    on the filename — a divergence (e.g. an empty ``run_id``) would silently
+    stop the sidecar from being read.
+    """
+    return receipt_path.with_name(receipt_path.stem + _HEAD_SUFFIX)
+
+
 #: Genesis linkage value for the first hop of a run (matches the audit-chain
 #: convention of a fixed 64-hex-zero anchor).
 GENESIS_HMAC: Final[str] = "0" * 64
@@ -285,15 +297,8 @@ class DelegationLedger:
         return self._dir / f"{safe}.jsonl"
 
     def head_path(self, run_id: str) -> Path:
-        """Return the chain-head sidecar path for ``run_id``.
-
-        Derives from :meth:`receipt_path` so the writer and
-        :func:`verify_run_chain` can never disagree on the filename - the
-        two previously built it independently, and a divergence (e.g. an
-        empty ``run_id``) would silently stop the sidecar from being read.
-        """
-        receipt = self.receipt_path(run_id)
-        return receipt.with_name(receipt.stem + _HEAD_SUFFIX)
+        """Return the chain-head sidecar path for ``run_id``."""
+        return _head_sidecar_path(self.receipt_path(run_id))
 
     @contextlib.contextmanager
     def _append_lock(self, run_id: str) -> Iterator[None]:
@@ -558,7 +563,11 @@ def verify_run_chain(
     # Check for a chain-head sidecar written by DelegationLedger.record_chain_head.
     # When present, the declared hop count and head HMAC are compared against the
     # reconstructed chain; a mismatch means the tail was removed after sealing.
-    sidecar_path = path.with_name(path.stem + _HEAD_SUFFIX)
+    # Note: JSONL and sidecar are read without the append lock, so an in-flight
+    # append between the two reads may produce a spurious "chain grew after
+    # sealing" mismatch on an honest, growing chain.  This is a benign false
+    # positive for offline verification; live orchestration should not call this.
+    sidecar_path = _head_sidecar_path(path)
     sealed: bool | None = None
     if sidecar_path.is_file():
         head: Any
@@ -595,7 +604,7 @@ def verify_run_chain(
                             direction = "head HMAC mismatch"
                         errors.append(
                             f"chain head mismatch: sidecar declares {declared_count} hop(s) "
-                            f"with head HMAC {declared_hmac[:16]}…, "
+                            f"with head HMAC {declared_hmac[:16]}..., "
                             f"but {len(receipts)} hop(s) were reconstructed "
                             f"({direction})"
                         )
