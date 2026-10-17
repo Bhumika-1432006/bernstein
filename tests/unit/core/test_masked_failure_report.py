@@ -197,6 +197,7 @@ class TestScanForMaskedFailures:
         assert all(r.final_outcome == KIND_TASK_ABANDONED for r in reports)
         assert all(not r.is_masked for r in reports)
 
+
 # ---------------------------------------------------------------------------
 # LedgerEntry compatibility
 # ---------------------------------------------------------------------------
