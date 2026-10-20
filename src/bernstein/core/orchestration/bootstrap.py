@@ -1439,14 +1439,29 @@ def _bootstrap_from_goal_impl(
 
     _existing_gates = None
     _existing_formal_verification = None
+    _existing_evolution_enabled = True
+    _existing_gate_repair_enabled = True
+    _existing_test_followup_enabled = True
+    _existing_internal_llm_provider = "none"
     _seed_path = resolve_seed_path(workdir)
     if _seed_path.exists():
         try:
-            _existing = parse_seed(_seed_path)
+            # Use require_goal=False so a bernstein.yaml without a ``goal``
+            # key (valid when the goal comes from --from-plan) still yields
+            # the operator settings we need (#6604).
+            _existing = parse_seed(_seed_path, require_goal=False)
             _existing_gates = _existing.quality_gates
             _existing_formal_verification = _existing.formal_verification
+            _existing_evolution_enabled = _existing.evolution_enabled
+            _existing_gate_repair_enabled = _existing.gate_repair_enabled
+            _existing_test_followup_enabled = getattr(
+                getattr(_existing, "orchestration", None), "test_followup", True
+            )
+            _existing_internal_llm_provider = _existing.internal_llm_provider
         except Exception as exc:
-            logger.debug("Could not read quality_gates from %s: %s", _seed_path, exc)
+            logger.debug("Could not read settings from %s: %s", _seed_path, exc)
+
+    from bernstein.core.config.seed_config import OrchestrationConfig
 
     seed = SeedConfig(
         goal=goal,
@@ -1454,6 +1469,10 @@ def _bootstrap_from_goal_impl(
         model=model,
         quality_gates=_existing_gates,
         formal_verification=_existing_formal_verification,
+        evolution_enabled=_existing_evolution_enabled,
+        gate_repair_enabled=_existing_gate_repair_enabled,
+        orchestration=OrchestrationConfig(test_followup=_existing_test_followup_enabled),
+        internal_llm_provider=_existing_internal_llm_provider,
     )  # type: ignore[call-arg]
 
     # Detect first run: no .sdd/ and no bernstein.yaml yet
