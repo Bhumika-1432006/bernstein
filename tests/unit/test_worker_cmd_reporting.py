@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest import mock
 
+import httpx
 import pytest
 
 from bernstein.cli.commands import worker_cmd
@@ -165,3 +166,55 @@ class TestReportFinished:
         (call,) = client.post.call_args_list
         assert call.args[0] == "http://central:8052/tasks/task-9/complete"
         assert call.kwargs["json"]["agent_branch"] == "agent/sess-9"
+
+
+class TestReportFinishedRetry:
+    """HTTP errors and transport failures must preserve the report for retry (#6627)."""
+
+    def _make_response(self, status: int) -> httpx.Response:
+        return httpx.Response(
+            status,
+            request=httpx.Request("POST", "http://central:8052/tasks/t1/fail"),
+        )
+
+    def test_http_5xx_requeues_report(self, tmp_path: Path) -> None:
+        loop = _make_loop(tmp_path)
+        loop._pending_reports = [("t1", False, "boom", None)]
+        client = mock.MagicMock()
+        client.post.return_value = self._make_response(500)
+
+        loop._report_finished(client)
+
+        assert len(loop._pending_reports) == 1, "HTTP 500 must preserve the report for retry"
+        assert loop._pending_reports[0][0] == "t1"
+
+    def test_transport_error_requeues_report(self, tmp_path: Path) -> None:
+        loop = _make_loop(tmp_path)
+        loop._pending_reports = [("t2", True, "done", None)]
+        client = mock.MagicMock()
+        client.post.side_effect = httpx.ConnectError("refused")
+
+        loop._report_finished(client)
+
+        assert len(loop._pending_reports) == 1, "ConnectError must preserve the report for retry"
+        assert loop._pending_reports[0][0] == "t2"
+
+    def test_http_409_drops_report_silently(self, tmp_path: Path) -> None:
+        loop = _make_loop(tmp_path)
+        loop._pending_reports = [("t3", True, "done", None)]
+        client = mock.MagicMock()
+        client.post.return_value = self._make_response(409)
+
+        loop._report_finished(client)
+
+        assert loop._pending_reports == [], "HTTP 409 means coordinator already terminal; drop"
+
+    def test_http_200_clears_report(self, tmp_path: Path) -> None:
+        loop = _make_loop(tmp_path)
+        loop._pending_reports = [("t4", False, "failed", None)]
+        client = mock.MagicMock()
+        client.post.return_value = self._make_response(200)
+
+        loop._report_finished(client)
+
+        assert loop._pending_reports == []

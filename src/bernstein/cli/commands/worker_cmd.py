@@ -561,32 +561,35 @@ class WorkerLoop:
         When *delivery* is ``(branch, sha)``, the body includes
         ``agent_branch`` and ``agent_sha`` so the central can fetch and
         merge the remote agent's work (#6538).
+
+        Raises :class:`httpx.HTTPStatusError` for non-2xx responses so
+        :meth:`_report_finished` can re-queue the report for retry.
         """
         body: dict[str, str] = {"result_summary": summary}
         if delivery is not None:
             body["agent_branch"] = delivery[0]
             body["agent_sha"] = delivery[1]
-        try:
-            client.post(
-                f"{self._server_url}/tasks/{task_id}/complete",
-                json=body,
-                headers=self._headers(),
-                timeout=10.0,
-            )
-        except httpx.HTTPError as exc:
-            logger.warning("Failed to report completion for %s: %s", task_id, exc)
+        response = client.post(
+            f"{self._server_url}/tasks/{task_id}/complete",
+            json=body,
+            headers=self._headers(),
+            timeout=10.0,
+        )
+        response.raise_for_status()
 
     def _fail_task(self, client: httpx.Client, task_id: str, reason: str) -> None:
-        """Report task failure to the central server."""
-        try:
-            client.post(
-                f"{self._server_url}/tasks/{task_id}/fail",
-                json={"reason": reason},
-                headers=self._headers(),
-                timeout=10.0,
-            )
-        except httpx.HTTPError as exc:
-            logger.warning("Failed to report failure for %s: %s", task_id, exc)
+        """Report task failure to the central server.
+
+        Raises :class:`httpx.HTTPStatusError` for non-2xx responses so
+        :meth:`_report_finished` can re-queue the report for retry.
+        """
+        response = client.post(
+            f"{self._server_url}/tasks/{task_id}/fail",
+            json={"reason": reason},
+            headers=self._headers(),
+            timeout=10.0,
+        )
+        response.raise_for_status()
 
     def _release_task(self, client: httpx.Client, task_id: str, reason: str) -> None:
         """Release a claimed task back to the open pool after a failed spawn.
@@ -613,15 +616,51 @@ class WorkerLoop:
         in-agent completion curl may never fire (crash, kill, wrong URL), so
         the worker reports completion/failure itself (#2808). A task already
         terminal server-side simply no-ops the redundant report.
+
+        Reports that fail with an HTTP 5xx response or a transport error are
+        re-queued so the next poll cycle retries them (#6627). HTTP 4xx
+        responses (other than 409) are logged and discarded — they indicate a
+        protocol error that a retry cannot fix. HTTP 409 means the coordinator
+        already has a terminal state for the task; the local report is dropped
+        without error.
         """
         if not self._pending_reports:
             return
         pending, self._pending_reports = self._pending_reports, []
         for task_id, ok, detail, delivery in pending:
-            if ok:
-                self._complete_task(client, task_id, detail, delivery)
-            else:
-                self._fail_task(client, task_id, detail)
+            try:
+                if ok:
+                    self._complete_task(client, task_id, detail, delivery)
+                else:
+                    self._fail_task(client, task_id, detail)
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status == 409:
+                    logger.debug(
+                        "Task %s already terminal on coordinator (409); dropping local report",
+                        task_id,
+                    )
+                elif status >= 500:
+                    logger.warning(
+                        "Coordinator returned %d for task %s; will retry next cycle",
+                        status,
+                        task_id,
+                    )
+                    self._pending_reports.append((task_id, ok, detail, delivery))
+                else:
+                    logger.warning(
+                        "Failed to report outcome for %s (HTTP %d): %s",
+                        task_id,
+                        status,
+                        exc,
+                    )
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Transport error reporting outcome for %s; will retry next cycle: %s",
+                    task_id,
+                    exc,
+                )
+                self._pending_reports.append((task_id, ok, detail, delivery))
 
     def _spawn_agent(self, task: dict) -> int | None:
         """Spawn a CLI agent process to work on a task. Returns PID or None."""
