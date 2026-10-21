@@ -16,9 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from bernstein.core.seed import SeedConfig
-
 
 _BOOTSTRAP = "bernstein.core.orchestration.bootstrap"
 
@@ -43,7 +41,6 @@ def _run_seed_construction(
     seed construction and reach ``_goal_sync_and_plan``, where we intercept
     the seed and abort.
     """
-    from types import SimpleNamespace
     from bernstein.core.orchestration.bootstrap import _bootstrap_from_goal_impl
 
     captured: list[SeedConfig] = []
@@ -77,6 +74,7 @@ def _run_seed_construction(
         fake_inv.write_lockfile = MagicMock()
         fake_mod = {"bernstein.evolution.invariants": fake_inv}
         import sys
+
         stack.enter_context(patch.dict(sys.modules, fake_mod))
 
         with pytest.raises(SystemExit):
@@ -105,9 +103,7 @@ class TestGoalBootstrapSeedPreservation:
 
         seed = _run_seed_construction(tmp_path, goal="fix the lint")
 
-        assert seed.gate_repair_enabled is False, (
-            f"gate_repair_enabled reverted to True (default); seed={seed}"
-        )
+        assert seed.gate_repair_enabled is False, f"gate_repair_enabled reverted to True (default); seed={seed}"
 
     def test_max_agents_preserved(self, tmp_path: Path) -> None:
         """max_agents in bernstein.yaml survives into the inline-goal seed."""
