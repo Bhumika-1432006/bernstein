@@ -468,7 +468,17 @@ def _choose_retry_escalation(
     terminal_reason = task.terminal_reason
 
     def _model(escalated: str) -> str:
-        return pinned_model or escalated
+        # A pinned model is an instruction; never substitute a bare tier name for it.
+        if pinned_model:
+            return pinned_model
+        # A current model that carries a provider prefix (e.g. "openai/gpt-4o") belongs
+        # to a gateway whose model registry is separate from the Claude tier ladder. The
+        # escalation ladder ("haiku" / "sonnet" / "opus") has no route there, so returning
+        # a bare tier name would cause the retry to fail before the agent does any work.
+        # Keep the current model unchanged when it is off the ladder (#6605).
+        if "/" in current_model and escalated in _MODEL_LADDER:
+            return current_model
+        return escalated
 
     match terminal_reason:
         case "error_max_turns":
