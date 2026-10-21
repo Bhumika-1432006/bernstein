@@ -1201,8 +1201,7 @@ async def run_janitor(
                     # verifiable evidence the deliverable exists; the missing commit
                     # attribution does not undercut it.
                     satisfied_detail = (
-                        f"empty diff: all completion signals already satisfied on base "
-                        f"({attribution_reason})"
+                        f"empty diff: all completion signals already satisfied on base ({attribution_reason})"
                     )
                     signal_results.append(("attribution:already_satisfied", True, satisfied_detail))
                     logger.info(
