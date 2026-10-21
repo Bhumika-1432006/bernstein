@@ -836,6 +836,62 @@ class TestQualityGatesBenchmarkParsing:
             parse_seed(seed_file)
 
 
+class TestQualityGatesDlpParsing:
+    """dlp_* keys in quality_gates: must be wired through to QualityGatesConfig (#6615)."""
+
+    def test_dlp_scan_false_is_honoured(self, seed_file: Path) -> None:
+        seed_file.write_text('goal: "Test"\nquality_gates:\n  dlp_scan: false\n')
+        cfg = parse_seed(seed_file)
+        assert cfg.quality_gates is not None
+        assert cfg.quality_gates.dlp_scan is False
+
+    def test_dlp_scan_true_is_honoured(self, seed_file: Path) -> None:
+        seed_file.write_text('goal: "Test"\nquality_gates:\n  dlp_scan: true\n')
+        cfg = parse_seed(seed_file)
+        assert cfg.quality_gates is not None
+        assert cfg.quality_gates.dlp_scan is True
+
+    def test_dlp_block_license_violations_false_is_honoured(self, seed_file: Path) -> None:
+        seed_file.write_text(
+            'goal: "Test"\nquality_gates:\n  dlp_block_license_violations: false\n'
+        )
+        cfg = parse_seed(seed_file)
+        assert cfg.quality_gates is not None
+        assert cfg.quality_gates.dlp_block_license_violations is False
+
+    def test_dlp_block_regulated_data_false_is_honoured(self, seed_file: Path) -> None:
+        seed_file.write_text(
+            'goal: "Test"\nquality_gates:\n  dlp_block_regulated_data: false\n'
+        )
+        cfg = parse_seed(seed_file)
+        assert cfg.quality_gates is not None
+        assert cfg.quality_gates.dlp_block_regulated_data is False
+
+    def test_dlp_ignore_paths_is_honoured(self, seed_file: Path) -> None:
+        seed_file.write_text(
+            'goal: "Test"\nquality_gates:\n  dlp_ignore_paths: ["vendor/", "fixtures/"]\n'
+        )
+        cfg = parse_seed(seed_file)
+        assert cfg.quality_gates is not None
+        assert cfg.quality_gates.dlp_ignore_paths == ["vendor/", "fixtures/"]
+
+    def test_dlp_allowlist_prefixes_is_honoured(self, seed_file: Path) -> None:
+        seed_file.write_text(
+            'goal: "Test"\nquality_gates:\n  dlp_allowlist_prefixes: ["MY_PREFIX"]\n'
+        )
+        cfg = parse_seed(seed_file)
+        assert cfg.quality_gates is not None
+        assert cfg.quality_gates.dlp_allowlist_prefixes == ["MY_PREFIX"]
+
+    def test_dlp_defaults_when_omitted(self, seed_file: Path) -> None:
+        seed_file.write_text('goal: "Test"\nquality_gates:\n  lint: true\n')
+        cfg = parse_seed(seed_file)
+        assert cfg.quality_gates is not None
+        assert cfg.quality_gates.dlp_scan is True
+        assert cfg.quality_gates.dlp_block_license_violations is True
+        assert cfg.quality_gates.dlp_block_proprietary_data is False
+
+
 # ---------------------------------------------------------------------------
 # resolve_seed_path
 # ---------------------------------------------------------------------------
