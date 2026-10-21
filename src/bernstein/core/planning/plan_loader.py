@@ -152,9 +152,7 @@ def _parse_completion_signals(raw_signals: list[object], context: str = "") -> l
     signals: list[CompletionSignal] = []
     for i, raw in enumerate(raw_signals):
         if not isinstance(raw, dict):
-            raise PlanLoadError(
-                f"{context}: completion_signals[{i}] is not a mapping"
-            )
+            raise PlanLoadError(f"{context}: completion_signals[{i}] is not a mapping")
         sig_type = raw.get("type", "")
         if sig_type not in valid_types:
             raise PlanLoadError(
