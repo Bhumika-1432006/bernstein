@@ -1454,9 +1454,7 @@ def _bootstrap_from_goal_impl(
             _existing_formal_verification = _existing.formal_verification
             _existing_evolution_enabled = _existing.evolution_enabled
             _existing_gate_repair_enabled = _existing.gate_repair_enabled
-            _existing_test_followup_enabled = getattr(
-                getattr(_existing, "orchestration", None), "test_followup", True
-            )
+            _existing_test_followup_enabled = getattr(getattr(_existing, "orchestration", None), "test_followup", True)
             _existing_internal_llm_provider = _existing.internal_llm_provider
         except Exception as exc:
             logger.debug("Could not read settings from %s: %s", _seed_path, exc)
