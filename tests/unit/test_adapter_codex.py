@@ -815,7 +815,7 @@ class TestCodexReasoningEffort:
             assert "--reasoning-effort" in inner, f"missing flag for effort={effort_in!r}: {inner}"
             idx = inner.index("--reasoning-effort")
             assert inner[idx + 1] == effort_out, (
-                f"effort={effort_in!r} -> expected {effort_out!r}, got {inner[idx+1]!r}"
+                f"effort={effort_in!r} -> expected {effort_out!r}, got {inner[idx + 1]!r}"
             )
 
     def test_unset_effort_omits_flag(self, tmp_path: Path) -> None:
@@ -874,6 +874,4 @@ class TestCodexReasoningEffort:
     def test_effort_map_covers_all_bernstein_values(self) -> None:
         """Every key in _EFFORT_MAP maps to a _CODEX_SUPPORTED_EFFORTS value."""
         for key, val in _EFFORT_MAP.items():
-            assert val in _CODEX_SUPPORTED_EFFORTS, (
-                f"_EFFORT_MAP[{key!r}] = {val!r} is not in _CODEX_SUPPORTED_EFFORTS"
-            )
+            assert val in _CODEX_SUPPORTED_EFFORTS, f"_EFFORT_MAP[{key!r}] = {val!r} is not in _CODEX_SUPPORTED_EFFORTS"
