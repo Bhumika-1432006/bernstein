@@ -1,4 +1,4 @@
-﻿# Task: {{TASK_TITLE}}
+# Task: {{TASK_TITLE}}
 
 ## Description
 {{TASK_DESCRIPTION}}

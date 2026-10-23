@@ -1,4 +1,4 @@
-﻿# Progress Reporting
+# Progress Reporting
 
 Every 60 seconds, report your progress to the task server so the orchestrator
 can detect if you are stuck and intervene before token waste accumulates.

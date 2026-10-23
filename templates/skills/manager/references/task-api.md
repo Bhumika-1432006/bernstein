@@ -1,4 +1,4 @@
-﻿# Task server API
+# Task server API
 
 Base URL: **{{SERVER_URL}}**
 

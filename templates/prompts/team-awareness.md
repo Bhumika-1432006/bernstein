@@ -1,4 +1,4 @@
-﻿## Team awareness
+## Team awareness
 
 Other agents are working in parallel on this codebase. Recent activity:
 {{ BULLETIN_SUMMARY }}
