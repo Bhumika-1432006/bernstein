@@ -461,6 +461,9 @@ def _choose_retry_escalation(
     instruction, not a default, and substituting a tier name for it hands the
     configured provider a model it does not serve (#4274).
 
+    A gateway-prefixed model (e.g. ``"openai/gpt-4o"``) is held like a pin
+    across all retries; escalation still raises effort.
+
     Returns (new_model, new_effort).
     """
     from bernstein.core.tasks.models import Scope as _Scope
