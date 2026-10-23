@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 import yaml
 
 from bernstein.core.models import CompletionSignal, Complexity, Scope, Task, TaskStatus, TaskType
-from bernstein.core.planning.plan_schema import ARTIFACT_CRITERION_TYPE_VALUES
+from bernstein.core.planning.plan_schema import SUPPORTED_SIGNAL_TYPES
 from bernstein.core.tasks.artifacts import ArtifactKind, ArtifactSpec, ArtifactSpecError, parse_artifact_spec
 
 if TYPE_CHECKING:
@@ -132,32 +132,15 @@ def _parse_completion_signals(raw_signals: list[object], context: str = "") -> l
     Raises:
         PlanLoadError: A ``file_contains`` signal is missing its path or text.
     """
-    # Canonical set of supported signal types: basic signals + artifact-mode
-    # criteria from plan_schema.  This set must stay in sync with the runtime
-    # evaluator (janitor.py / _NONTRIVIAL_SIGNAL_TYPES) so that a gate
-    # declared in a plan is never silently dropped before reaching the server.
-    valid_types: frozenset[str] = frozenset(
-        {
-            "path_exists",
-            "glob_exists",
-            "test_passes",
-            "file_contains",
-            "llm_review",
-            "llm_judge",
-            "figures_grounded",
-            "absence_verified",
-        }
-        | set(ARTIFACT_CRITERION_TYPE_VALUES)  # schema_valid, criteria_match, hash_stable
-    )
     signals: list[CompletionSignal] = []
     for i, raw in enumerate(raw_signals):
         if not isinstance(raw, dict):
             raise PlanLoadError(f"{context}: completion_signals[{i}] is not a mapping")
         sig_type = raw.get("type", "")
-        if sig_type not in valid_types:
+        if sig_type not in SUPPORTED_SIGNAL_TYPES:
             raise PlanLoadError(
                 f"{context}: completion_signals[{i}] has unknown type {sig_type!r}; "
-                f"supported types: {sorted(valid_types)}"
+                f"supported types: {sorted(SUPPORTED_SIGNAL_TYPES)}"
             )
         if sig_type == "file_contains":
             signal_context = f"{context}: completion_signals[{i}]" if context else f"completion_signals[{i}]"

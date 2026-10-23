@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from bernstein.core.planning.plan_loader import PlanLoadError, load_plan
-
+from bernstein.core.planning.plan_schema import SUPPORTED_SIGNAL_TYPES
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -133,7 +133,6 @@ class TestFailClosed:
             load_plan(p)
 
     def test_non_mapping_entry_raises(self, tmp_path: Path) -> None:
-        import yaml
 
         plan_text = """
 name: bad-plan
@@ -154,3 +153,23 @@ stages:
         p = _write_plan(tmp_path, [{"type": "test_passes"}])
         with pytest.raises(PlanLoadError, match="no value"):
             load_plan(p)
+
+    def test_loader_accepts_exactly_supported_signal_types(self, tmp_path: Path) -> None:
+        """The loader's accepted set must equal SUPPORTED_SIGNAL_TYPES in plan_schema.
+
+        Adding a type to plan_schema.SUPPORTED_SIGNAL_TYPES must be sufficient to
+        make it loadable — no separate hand-edit of the loader required.
+        """
+        # Verify every type in SUPPORTED_SIGNAL_TYPES loads successfully.
+        # Use a generic value that satisfies all non-file_contains signal types.
+        for sig_type in sorted(SUPPORTED_SIGNAL_TYPES):
+            if sig_type == "file_contains":
+                sig = {"type": sig_type, "path": "README.md", "contains": "hello"}
+            else:
+                sig = {"type": sig_type, "value": "dummy"}
+            p = _write_plan(tmp_path, [sig])
+            _, tasks = load_plan(p)
+            signals = tasks[0].completion_signals
+            assert any(s.type == sig_type for s in signals), (
+                f"signal type {sig_type!r} from SUPPORTED_SIGNAL_TYPES was not preserved by load_plan"
+            )
