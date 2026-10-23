@@ -1707,9 +1707,7 @@ class TestEmptyDiffGuardAndAttribution:
         assert satisfied, f"expected attribution:already_satisfied, got {results[0].signal_results}"
 
     @pytest.mark.asyncio
-    async def test_already_satisfied_all_gates_pass_accepted_without_retry(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_already_satisfied_all_gates_pass_accepted_without_retry(self, tmp_path: Path) -> None:
         """Clean exit + empty diff + all gates pass (file_contains, test_passes)
         -> done with 'already satisfied on base', no retry (#6606)."""
         _init_git_repo(tmp_path)
