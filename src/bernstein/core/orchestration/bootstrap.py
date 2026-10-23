@@ -1446,9 +1446,13 @@ def _bootstrap_from_goal_impl(
     _existing_seed: SeedConfig | None = None
     if _seed_path.exists():
         try:
-            _existing_seed = parse_seed(_seed_path)
+            # require_goal=False: the goal is supplied by the caller (via -g or
+            # a plan file), so a bernstein.yaml with no goal key is valid here.
+            # We only need the operator settings (evolution_enabled, max_agents,
+            # etc.) from the file (#6604 / #6642).
+            _existing_seed = parse_seed(_seed_path, require_goal=False)
         except Exception as exc:
-            logger.debug("Could not read seed policy from %s: %s", _seed_path, exc)
+            logger.warning("Could not read seed policy from %s: %s", _seed_path, exc)
 
     if _existing_seed is not None:
         # Start from the complete parsed seed, then apply launch-time overrides.
