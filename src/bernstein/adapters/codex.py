@@ -135,18 +135,15 @@ _UNDECLARED_HOST_ISOLATION = "none"
 
 #: Effort values the Codex CLI accepts via ``--reasoning-effort``.
 #: Values outside this set are unsupported and are rejected before spawn.
-_CODEX_SUPPORTED_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high"})
+_CODEX_SUPPORTED_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high", "max", "xhigh", "ultra"})
 
-#: Bernstein internal effort names that map onto a Codex ``--reasoning-effort``
-#: value.  ``"max"`` is not a distinct Codex tier; it is clamped to ``"high"``.
-#: ``None`` / empty string means the operator did not specify an effort;
-#: ``--reasoning-effort`` is omitted and the CLI's own default applies.
+#: Bernstein-only effort names that need translation before being forwarded to
+#: Codex.  Values already in ``_CODEX_SUPPORTED_EFFORTS`` are passed through
+#: unchanged; only Bernstein-internal names absent from Codex's vocabulary are
+#: listed here.  ``None`` / empty string means the operator did not specify an
+#: effort; ``--reasoning-effort`` is omitted and the CLI's own default applies.
 _EFFORT_MAP: dict[str, str] = {
-    "max": "high",
-    "high": "high",
-    "medium": "medium",
     "normal": "medium",
-    "low": "low",
 }
 
 
@@ -262,15 +259,14 @@ def _codex_reasoning_effort_args(effort: str | None) -> list[str]:
     """
     if not effort:
         return []
-    codex_effort = _EFFORT_MAP.get(effort)
-    if codex_effort is None:
-        if effort in _CODEX_SUPPORTED_EFFORTS:
-            codex_effort = effort
-        else:
-            raise ValueError(
-                f"CodexAdapter: effort {effort!r} is not supported. "
-                f"Supported values: {sorted(_EFFORT_MAP)} (or raw Codex values: {sorted(_CODEX_SUPPORTED_EFFORTS)})."
-            )
+    # Translate Bernstein-internal names; values already in Codex's vocabulary pass through.
+    codex_effort = _EFFORT_MAP.get(effort, effort)
+    if codex_effort not in _CODEX_SUPPORTED_EFFORTS:
+        raise ValueError(
+            f"CodexAdapter: effort {effort!r} is not supported. "
+            f"Bernstein names that translate: {sorted(_EFFORT_MAP)}. "
+            f"Codex native values: {sorted(_CODEX_SUPPORTED_EFFORTS)}."
+        )
     return ["--reasoning-effort", codex_effort]
 
 

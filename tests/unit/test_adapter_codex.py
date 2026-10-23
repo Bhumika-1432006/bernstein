@@ -801,7 +801,7 @@ class TestCodexReasoningEffort:
             ("high", "high"),
             ("medium", "medium"),
             ("low", "low"),
-            ("max", "high"),
+            ("max", "max"),
             ("normal", "medium"),
         ]:
             with patch("bernstein.adapters.codex.subprocess.Popen", return_value=proc_mock) as popen:
@@ -871,7 +871,7 @@ class TestCodexReasoningEffort:
         m_idx = inner.index("-m")
         assert inner[m_idx + 1] == "o4-mini", f"model changed: {inner}"
 
-    def test_effort_map_covers_all_bernstein_values(self) -> None:
-        """Every key in _EFFORT_MAP maps to a _CODEX_SUPPORTED_EFFORTS value."""
+    def test_effort_map_translations_target_supported_values(self) -> None:
+        """Every translated value in _EFFORT_MAP is a valid Codex effort level."""
         for key, val in _EFFORT_MAP.items():
             assert val in _CODEX_SUPPORTED_EFFORTS, f"_EFFORT_MAP[{key!r}] = {val!r} is not in _CODEX_SUPPORTED_EFFORTS"
