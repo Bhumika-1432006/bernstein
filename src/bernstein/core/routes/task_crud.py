@@ -1669,21 +1669,20 @@ async def complete_task(task_id: str, body: TaskCompleteRequest, request: Reques
             # a different session.  This prevents a delayed report from a
             # previously-evicted worker from overwriting a legitimate later
             # claim.  Callers that omit the field are accepted as before.
-            if body.claimed_by_session is not None:
-                if task.claimed_by_session != body.claimed_by_session:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "error": "stale_claim",
-                            "message": (
-                                f"Task '{task_id}' is held by a different session; "
-                                "your completion report is stale."
-                            ),
-                            "task_id": task_id,
-                            "expected_session": body.claimed_by_session,
-                            "actual_session": task.claimed_by_session,
-                        },
-                    )
+            if body.claimed_by_session is not None and task.claimed_by_session != body.claimed_by_session:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "stale_claim",
+                        "message": (
+                            f"Task '{task_id}' is held by a different session; "
+                            "your completion report is stale."
+                        ),
+                        "task_id": task_id,
+                        "expected_session": body.claimed_by_session,
+                        "actual_session": task.claimed_by_session,
+                    },
+                )
             # Auto-claim if task reverted to "open" and the caller did NOT
             # supply a claimed_by_session (legacy path).  When a session is
             # supplied, an open task is a claim mismatch (None != supplied)
