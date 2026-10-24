@@ -1037,3 +1037,4 @@ class TestQualityGatesDlpParsing:
         cfg = parse_seed(seed_file)
         assert cfg.quality_gates is not None
         assert cfg.quality_gates.dlp_allowlist_prefixes == ["REDACTED"]
+
