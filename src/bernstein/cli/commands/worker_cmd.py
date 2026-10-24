@@ -583,15 +583,13 @@ class WorkerLoop:
             )
             if resp.status_code == 409:
                 logger.warning(
-                    "Completion for %s returned 409 (conflict); coordinator already has a terminal state — discarding",
+                    "Completion for %s: 409 conflict; coordinator already terminal, discarding",
                     task_id,
                 )
                 return True
             if resp.is_success:
                 return True
-            logger.warning(
-                "Failed to report completion for %s: HTTP %s", task_id, resp.status_code
-            )
+            logger.warning("Failed to report completion for %s: HTTP %s", task_id, resp.status_code)
             return False
         except httpx.HTTPError as exc:
             logger.warning("Failed to report completion for %s: %s", task_id, exc)
@@ -613,15 +611,13 @@ class WorkerLoop:
             )
             if resp.status_code == 409:
                 logger.warning(
-                    "Fail-report for %s returned 409 (conflict); coordinator already has a terminal state — discarding",
+                    "Fail-report for %s: 409 conflict; coordinator already terminal, discarding",
                     task_id,
                 )
                 return True
             if resp.is_success:
                 return True
-            logger.warning(
-                "Failed to report failure for %s: HTTP %s", task_id, resp.status_code
-            )
+            logger.warning("Failed to report failure for %s: HTTP %s", task_id, resp.status_code)
             return False
         except httpx.HTTPError as exc:
             logger.warning("Failed to report failure for %s: %s", task_id, exc)
