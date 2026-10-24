@@ -780,3 +780,160 @@ class TestSandboxFailureDetection:
         )
         detected = detect_sandbox_failure(log)
         assert detected is not None and detected[1:] == (3, 3)
+
+
+class TestReasoningEffortArgs:
+    """Unit tests for _reasoning_effort_args (issue #6641)."""
+
+    def test_o3_high_effort_passes_flag(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        args = _reasoning_effort_args("o3", "high")
+        assert args == ("--reasoning-effort", "high")
+
+    def test_o4_mini_low_effort(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        args = _reasoning_effort_args("o4-mini", "low")
+        assert args == ("--reasoning-effort", "low")
+
+    def test_max_effort_maps_to_high(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        args = _reasoning_effort_args("o3", "max")
+        assert args == ("--reasoning-effort", "high")
+
+    def test_normal_effort_maps_to_medium(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        args = _reasoning_effort_args("o3", "normal")
+        assert args == ("--reasoning-effort", "medium")
+
+    def test_gpt_model_raises_for_non_default_effort(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        with pytest.raises(ValueError, match="does not support --reasoning-effort"):
+            _reasoning_effort_args("gpt-5.5", "high")
+
+    def test_gpt_model_raises_for_low_effort(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        with pytest.raises(ValueError, match="does not support --reasoning-effort"):
+            _reasoning_effort_args("gpt-5.4-mini", "low")
+
+    def test_unknown_effort_value_raises(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        with pytest.raises(ValueError, match="unrecognised effort value"):
+            _reasoning_effort_args("o3", "turbo")
+
+    def test_o3_snapshot_model_is_accepted(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        args = _reasoning_effort_args("o3-2025-04-16", "high")
+        assert args == ("--reasoning-effort", "high")
+
+    def test_o4_mini_snapshot_model_is_accepted(self):
+        from bernstein.adapters.codex import _reasoning_effort_args
+
+        args = _reasoning_effort_args("o4-mini-2025-04-16", "medium")
+        assert args == ("--reasoning-effort", "medium")
+
+
+class TestSpawnEffortIntegration:
+    """Verify that spawn passes --reasoning-effort for o-series and rejects bad combos."""
+
+    def _make_adapter(self):
+        from bernstein.adapters.codex import CodexAdapter
+
+        return CodexAdapter()
+
+    def _minimal_spawn_kwargs(self, model, effort, workdir):
+        from bernstein.core.models import ModelConfig
+
+        return {
+            "prompt": "do something",
+            "workdir": workdir,
+            "model_config": ModelConfig(model=model, effort=effort),
+            "session_id": "sess-effort-test",
+        }
+
+    def test_o3_spawn_includes_reasoning_effort_flag(self, tmp_path):
+        import contextlib
+        import subprocess
+
+        from bernstein.core.models import ModelConfig
+
+        from bernstein.adapters.codex import CodexAdapter
+
+        adapter = CodexAdapter()
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            raise FileNotFoundError("codex not installed")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(subprocess, "Popen", fake_popen)
+            with contextlib.suppress(RuntimeError):
+                adapter.spawn(
+                    prompt="p",
+                    workdir=tmp_path,
+                    model_config=ModelConfig(model="o3", effort="high"),
+                    session_id="sess-1",
+                )
+
+        cmd = captured.get("cmd", [])
+        flat_cmd = " ".join(str(c) for c in cmd)
+        assert "--reasoning-effort" in flat_cmd
+        assert "high" in flat_cmd
+
+    def test_gpt_model_with_default_effort_does_not_add_flag(self, tmp_path):
+        import contextlib
+        import subprocess
+
+        from bernstein.core.models import ModelConfig
+
+        from bernstein.adapters.codex import CodexAdapter
+
+        adapter = CodexAdapter()
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            raise FileNotFoundError("codex not installed")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(subprocess, "Popen", fake_popen)
+            with contextlib.suppress(RuntimeError):
+                adapter.spawn(
+                    prompt="p",
+                    workdir=tmp_path,
+                    model_config=ModelConfig(model="gpt-5.5", effort="normal"),
+                    session_id="sess-2",
+                )
+
+        cmd = captured.get("cmd", [])
+        assert "--reasoning-effort" not in cmd
+
+    def test_gpt_model_with_high_effort_raises_before_spawn(self, tmp_path):
+        import subprocess
+
+        from bernstein.core.models import ModelConfig
+
+        from bernstein.adapters.codex import CodexAdapter
+
+        adapter = CodexAdapter()
+
+        def fake_popen(cmd, **kwargs):
+            raise AssertionError("Popen should not be called")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(subprocess, "Popen", fake_popen)
+            with pytest.raises(ValueError, match="does not support --reasoning-effort"):
+                adapter.spawn(
+                    prompt="p",
+                    workdir=tmp_path,
+                    model_config=ModelConfig(model="gpt-5.5", effort="high"),
+                    session_id="sess-3",
+                )
