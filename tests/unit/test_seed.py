@@ -1015,25 +1015,19 @@ class TestQualityGatesDlpParsing:
         assert cfg.quality_gates.dlp_scan is True
 
     def test_dlp_block_license_violations_false(self, seed_file: Path) -> None:
-        seed_file.write_text(
-            'goal: "Test"\nquality_gates:\n  dlp_block_license_violations: false\n'
-        )
+        seed_file.write_text('goal: "Test"\nquality_gates:\n  dlp_block_license_violations: false\n')
         cfg = parse_seed(seed_file)
         assert cfg.quality_gates is not None
         assert cfg.quality_gates.dlp_block_license_violations is False
 
     def test_dlp_ignore_paths_roundtrip(self, seed_file: Path) -> None:
-        seed_file.write_text(
-            'goal: "Test"\nquality_gates:\n  dlp_ignore_paths: ["vendor/", "fixtures/"]\n'
-        )
+        seed_file.write_text('goal: "Test"\nquality_gates:\n  dlp_ignore_paths: ["vendor/", "fixtures/"]\n')
         cfg = parse_seed(seed_file)
         assert cfg.quality_gates is not None
         assert cfg.quality_gates.dlp_ignore_paths == ["vendor/", "fixtures/"]
 
     def test_dlp_allowlist_prefixes_roundtrip(self, seed_file: Path) -> None:
-        seed_file.write_text(
-            'goal: "Test"\nquality_gates:\n  dlp_allowlist_prefixes: ["REDACTED"]\n'
-        )
+        seed_file.write_text('goal: "Test"\nquality_gates:\n  dlp_allowlist_prefixes: ["REDACTED"]\n')
         cfg = parse_seed(seed_file)
         assert cfg.quality_gates is not None
         assert cfg.quality_gates.dlp_allowlist_prefixes == ["REDACTED"]
