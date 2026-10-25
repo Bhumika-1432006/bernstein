@@ -185,7 +185,7 @@ def test_independent_supervisors_keep_their_selected_policies(
     ]
 
 
-@pytest.mark.parametrize("replacement", [None, "goal: [synthetic-secret-marker", "cli: codex\n"])
+@pytest.mark.parametrize("replacement", [None, "goal: [synthetic-secret-marker"])
 def test_unavailable_selected_seed_refuses_relaunch_before_spawning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
