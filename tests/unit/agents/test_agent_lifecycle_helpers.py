@@ -555,9 +555,11 @@ def test_long_lived_clean_exit_auto_complete_does_not_warn(
     monkeypatch.setattr(al, "complete_task", lambda client, base, task_id, summary: None)
     session = _session(exit_code=0)
     session.spawn_ts = _time.time() - 300.0
+    task = MagicMock()
+    task.completion_signals = None  # no signals → skip gate check, auto-complete directly
     with caplog.at_level(logging.WARNING):
         success, _ = al._handle_orphan_no_signals(
-            _orphan_orch(tmp_path), MagicMock(), "T-1", session, "http://srv", _time.time()
+            _orphan_orch(tmp_path), task, "T-1", session, "http://srv", _time.time()
         )
     assert success is True
     assert not any("SUSPICIOUS auto-complete" in r.message for r in caplog.records)
