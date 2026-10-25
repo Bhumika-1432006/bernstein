@@ -1582,6 +1582,21 @@
               "type": "string",
               "title": "Task Id"
             }
+          },
+          {
+            "name": "stop_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "immediate",
+                "request",
+                "confirm"
+              ],
+              "type": "string",
+              "default": "immediate",
+              "title": "Stop Mode"
+            }
           }
         ],
         "requestBody": {
@@ -10990,6 +11005,21 @@
             "schema": {
               "type": "string",
               "title": "Task Id"
+            }
+          },
+          {
+            "name": "stop_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "immediate",
+                "request",
+                "confirm"
+              ],
+              "type": "string",
+              "default": "immediate",
+              "title": "Stop Mode"
             }
           }
         ],
@@ -22276,6 +22306,11 @@
           "suspended": {
             "type": "integer",
             "title": "Suspended",
+            "default": 0
+          },
+          "stop_req": {
+            "type": "integer",
+            "title": "Stop Req",
             "default": 0
           },
           "total": {
