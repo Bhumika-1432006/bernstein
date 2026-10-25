@@ -103,9 +103,9 @@ _DEFAULT_CODEX_MODEL = "gpt-5.5"
 _CLAUDE_TIER_MODELS = frozenset({"opus", "sonnet", "haiku"})
 
 #: Models that accept ``--reasoning-effort``. The o-series reasoning models
-#: (o3, o4-mini, and their snapshots) expose this flag; GPT-series models do
-#: not and will error if it is passed (#6641).
-_REASONING_EFFORT_MODELS = frozenset({"o3", "o3-mini", "o4-mini", "o3-pro"})
+#: (o1, o3, o4-mini, and their snapshots) expose this flag; GPT-series models
+#: do not and will silently receive no effort flag (#6641).
+_REASONING_EFFORT_MODELS = frozenset({"o1", "o1-mini", "o1-pro", "o3", "o3-mini", "o4-mini", "o3-pro"})
 
 #: Valid ``--reasoning-effort`` values accepted by the Codex CLI.
 _SUPPORTED_EFFORT_VALUES = frozenset({"low", "medium", "high"})
@@ -251,34 +251,19 @@ def _codex_model(model: str) -> str:
     return model
 
 
-def _reasoning_effort_args(model: str, effort: str) -> tuple[str, ...]:
-    """Return ``--reasoning-effort <value>`` argv when applicable, or raise.
+def _reasoning_effort_args(effort: str) -> tuple[str, ...]:
+    """Return ``--reasoning-effort <value>`` argv for an o-series model.
 
-    Reasoning effort is only valid for o-series models.  Passing it to a
-    GPT-series model causes the Codex CLI to error at startup, so we reject
-    the combination here rather than letting the subprocess fail with a
-    cryptic message (#6641).
-
-    A ``model`` that is not in the known o-series set is treated as
-    unsupported even if it begins with ``o``, because Codex's own validation
-    is stricter than a prefix check and we want the error to surface before
-    the process starts.
+    Only call this when the model is already known to be in
+    ``_REASONING_EFFORT_MODELS``; GPT-series models silently receive no
+    effort flag (#6641).
 
     Raises:
-        ValueError: when the effort value is unrecognised, or when effort is
-            requested for a model that does not support ``--reasoning-effort``.
+        ValueError: when the effort value is unrecognised.
     """
     mapped = _EFFORT_MAP.get(effort)
     if mapped is None:
         raise ValueError(f"CodexAdapter: unrecognised effort value {effort!r}. Supported values: {sorted(_EFFORT_MAP)}")
-    base_model = model.split(":")[0].split("/")[-1]
-    supports_effort = any(base_model == m or base_model.startswith(m + "-") for m in _REASONING_EFFORT_MODELS)
-    if not supports_effort:
-        raise ValueError(
-            f"CodexAdapter: model {model!r} does not support --reasoning-effort. "
-            f"Supported reasoning models: {sorted(_REASONING_EFFORT_MODELS)}. "
-            f"Remove the 'effort' field from the model config or switch to an o-series model."
-        )
     return ("--reasoning-effort", mapped)
 
 
@@ -493,13 +478,7 @@ class CodexAdapter(CLIAdapter):
             base_model == m or base_model.startswith(m + "-") for m in _REASONING_EFFORT_MODELS
         )
         if _model_supports_effort:
-            effort_args = _reasoning_effort_args(model, model_config.effort)
-        elif model_config.effort not in ("normal", "medium"):
-            raise ValueError(
-                f"CodexAdapter: model {model!r} does not support --reasoning-effort "
-                f"(effort={model_config.effort!r}). Use an o-series model or remove the "
-                f"effort override from the model config."
-            )
+            effort_args = _reasoning_effort_args(model_config.effort)
         cmd = [
             "codex",
             "exec",
