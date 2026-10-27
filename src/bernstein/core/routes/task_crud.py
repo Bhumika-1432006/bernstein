@@ -1674,10 +1674,7 @@ async def complete_task(task_id: str, body: TaskCompleteRequest, request: Reques
                     status_code=409,
                     detail={
                         "error": "stale_claim",
-                        "message": (
-                            f"Task '{task_id}' is held by a different session; "
-                            "your completion report is stale."
-                        ),
+                        "message": f"Task '{task_id}' is held by a different session; your completion report is stale.",
                         "task_id": task_id,
                         "expected_session": body.claimed_by_session,
                         "actual_session": task.claimed_by_session,
