@@ -214,15 +214,15 @@ covered under *Chronic-skip handling*.
 | Adapter | Binary | Last-green version | Verified | Receipt |
 |---|---|---|---|---|
 | agy | `agy` | 1.0.0 | 2026-07-11T05:57:23Z (not probed) | `006fb946868d` |
-| aider | `aider` | 0.86.2 | 2026-10-16T09:22:02Z | `da9610c926b0` |
-| claude | `claude` | 2.1.301 | 2026-10-16T09:22:02Z | `959849d05361` |
-| codex | `codex` | 0.163.0 | 2026-10-16T09:22:02Z | `25a08507c80d` |
-| copilot | `copilot` | 1.0.98 | 2026-10-16T09:22:02Z | `2574323ff128` |
-| gemini | `gemini` | 0.64.0 | 2026-10-16T09:22:02Z | `8b9df3da12c1` |
-| kimi | `kimi` | 1.51.0 | 2026-09-22T09:31:26Z (stale) | `b65ad3c6a1f8` |
-| opencode | `opencode` | 1.19.2 | 2026-10-16T09:22:02Z | `31fbe31c16bc` |
-| pydantic_ai | `clai` | 2.57.0 | 2026-10-16T09:22:02Z | `d6533fce3253` |
-| qwen | `qwen` | 0.25.2 | 2026-10-16T09:22:02Z | `bc15f2cac8dd` |
+| aider | `aider` | 0.86.2 | 2026-10-26T10:36:10Z | `e63c9f76a777` |
+| claude | `claude` | 2.1.310 | 2026-10-26T10:36:10Z | `8a5667eb330e` |
+| codex | `codex` | 0.164.0 | 2026-10-26T10:36:10Z | `b4170aee1a9f` |
+| copilot | `copilot` | 1.0.103 | 2026-10-26T10:36:10Z | `47193a6b2bc5` |
+| gemini | `gemini` | 0.65.0 | 2026-10-26T10:36:10Z | `66670a8db6ed` |
+| kimi | `kimi` | 1.51.0 | 2026-10-26T10:36:10Z | `d08e61f4c2cd` |
+| opencode | `opencode` | 1.19.4 | 2026-10-26T10:36:10Z | `32ccb7095705` |
+| pydantic_ai | `clai` | 2.61.0 | 2026-10-26T10:36:10Z | `22b2691ce3b9` |
+| qwen | `qwen` | 0.26.1 | 2026-10-26T10:36:10Z | `e31093ab0dcc` |
 <!-- last-green:end -->
 
 ## Operator knobs
