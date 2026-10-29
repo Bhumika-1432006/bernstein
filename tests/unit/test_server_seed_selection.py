@@ -210,6 +210,23 @@ def test_unavailable_selected_seed_refuses_relaunch_before_spawning(
     assert "synthetic-secret-marker" not in str(error.value)
 
 
+def test_goal_free_selected_seed_is_accepted_and_launches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    launch_harness: _Harness,
+) -> None:
+    """A selected seed with no goal key is valid and launches normally (#6604)."""
+    selected = _seed(tmp_path / "selected.yaml")
+    selected.write_text("cli: codex\n", encoding="utf-8")
+    _bootstrap(selected, tmp_path / "project")
+    before = dict(os.environ)
+
+    server_supervisor._launch_server(launch_harness.states[0])
+
+    assert len(launch_harness.launches) == 2
+    assert dict(os.environ) == before
+
+
 def test_selected_seed_provenance_records_path_without_seed_contents(
     tmp_path: Path,
     launch_harness: _Harness,
